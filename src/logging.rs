@@ -14,7 +14,7 @@ const MAX_DIFF_CHARS: usize = 2048;
 const PREVIEW_CHAR_LIMIT: usize = 160;
 const TARGET_GUTTER_WIDTH: usize = 28;
 const TIMESTAMP_FORMAT: &[FormatItem<'_>] =
-    format_description!("[year]-[month]-[day]-[hour]:[minute]:[second]");
+    format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextPipelineRecord {
@@ -302,22 +302,27 @@ fn write_prefix(
     metadata: &tracing::Metadata<'_>,
     use_color: bool,
 ) -> fmt::Result {
-    let timestamp = format_timestamp();
-    let timestamp = if use_color {
-        timestamp.dimmed().to_string()
+    let timestamp_plain = format_timestamp();
+    let timestamp_display = if use_color {
+        timestamp_plain.as_str().dimmed().to_string()
     } else {
-        timestamp
+        timestamp_plain
     };
-    writer.write_str(&timestamp)?;
-    writer.write_char(' ')?;
+    writer.write_str(&timestamp_display)?;
 
-    let level_text = format!("{:>5}", metadata.level());
-    let level_text = if use_color {
-        color_level(&level_text, *metadata.level())
+    let level_plain = format!("{:>5}", metadata.level());
+    let level_has_leading_space = level_plain.starts_with(' ');
+    let level_display = if use_color {
+        color_level(&level_plain, *metadata.level())
     } else {
-        level_text
+        level_plain.clone()
     };
-    writer.write_str(&level_text)?;
+    if level_has_leading_space {
+        writer.write_str(&level_display)?;
+    } else {
+        writer.write_char(' ')?;
+        writer.write_str(&level_display)?;
+    }
     writer.write_char(' ')?;
 
     let target_text = format!("{:<width$}", metadata.target(), width = TARGET_GUTTER_WIDTH);
@@ -345,5 +350,5 @@ fn color_level(text: &str, level: Level) -> String {
 fn format_timestamp() -> String {
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
     now.format(&TIMESTAMP_FORMAT)
-        .unwrap_or_else(|_| "0000-00-00-00:00:00".to_string())
+        .unwrap_or_else(|_| "0000-00-00 00:00:00".to_string())
 }
