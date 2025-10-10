@@ -182,7 +182,17 @@ fn stylize(fragment: String, use_color: bool, style: DiffStyle) -> String {
 }
 
 fn escape_fragment(value: &str) -> String {
-    value.escape_debug().to_string()
+    let mut rendered = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\n' => rendered.push('⏎'),
+            '\t' => rendered.push('⇥'),
+            '\r' => rendered.push_str("␍"),
+            c if c.is_control() => rendered.push_str(&format!("\\u{{{:04X}}}", c as u32)),
+            c => rendered.push(c),
+        }
+    }
+    rendered
 }
 
 fn push_body_line(lines: &mut Vec<String>, content: String) {
