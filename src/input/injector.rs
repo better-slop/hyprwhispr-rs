@@ -9,6 +9,18 @@ use tracing::{debug, info, warn};
 
 static SPACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r" +").expect("valid space collapse regex"));
+static CONTROL_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"([\n\t])\s*[.!?,;:]+").expect("valid control artifact cleanup regex")
+});
+static CONTROL_TRAILING_SPACE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[ \t]+([\n\t])").expect("valid trailing space cleanup regex"));
+static SYMBOL_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"([()\[\]\{\}])\s*[.!?,;:]+").expect("valid symbol artifact cleanup regex")
+});
+static OPEN_PAREN_SPACE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\( +").expect("valid open paren space cleanup regex"));
+static CLOSE_PAREN_SPACE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r" +\)").expect("valid close paren space cleanup regex"));
 
 pub struct TextInjector {
     enigo: Enigo,
@@ -114,6 +126,17 @@ impl TextInjector {
         }
         current = after_speech;
 
+        let cleaned_control = clean_control_artifacts(&current);
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "control_artifact_cleanup",
+                current.clone(),
+                cleaned_control.clone(),
+                None,
+            ));
+        }
+        current = cleaned_control;
+
         let collapsed = collapse_spaces(&current);
         if let Some(ref mut logged_steps) = steps {
             logged_steps.push(PipelineStepRecord::new(
@@ -184,10 +207,15 @@ impl TextInjector {
             (r"\bnew line\b", "\n"),
             (r"\btab\b", "\t"),
             (r"\bdash\b", "-"),
+            (r"\bdash dash\b", "--"),
             (r"\bhyphen\b", "-"),
             (r"\bunderscore\b", "_"),
             (r"\bopen paren\b", "("),
+            (r"\bopen parenthesis\b", "("),
+            (r"\bopen parentheses\b", "("),
             (r"\bclose paren\b", ")"),
+            (r"\bclose parenthesis\b", ")"),
+            (r"\bclose parentheses\b", ")"),
             (r"\bopen bracket\b", "["),
             (r"\bclose bracket\b", "]"),
             (r"\bopen brace\b", "{"),
@@ -244,4 +272,14 @@ fn normalize_line_breaks(input: &str) -> String {
 
 fn collapse_spaces(input: &str) -> String {
     SPACE_REGEX.replace_all(input, " ").to_string()
+}
+
+fn clean_control_artifacts(input: &str) -> String {
+    let without_control_punct = CONTROL_PUNCT_REGEX.replace_all(input, "$1");
+    let without_trailing_space =
+        CONTROL_TRAILING_SPACE_REGEX.replace_all(&without_control_punct, "$1");
+    let without_symbol_punct = SYMBOL_PUNCT_REGEX.replace_all(&without_trailing_space, "$1");
+    let collapsed_open = OPEN_PAREN_SPACE_REGEX.replace_all(&without_symbol_punct, "(");
+    let collapsed_close = CLOSE_PAREN_SPACE_REGEX.replace_all(&collapsed_open, ")");
+    collapsed_close.to_string()
 }
