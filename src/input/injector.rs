@@ -63,47 +63,61 @@ impl TextInjector {
 
 
     fn preprocess_text(&self, text: &str) -> String {
-        debug!("=== Text Preprocessing Pipeline ===");
-        debug!("1. Original text: {:?}", text);
+        debug!("┌─ 📝 Text Transformation Pipeline");
+        debug!("│  IN: {:?}", text);
         
         let mut processed = text.to_string();
+        let original = text.to_string();
 
         // Normalize line breaks to spaces to avoid unintended Enter
         processed = processed.replace("\r\n", " ");
         processed = processed.replace('\r', " ");
         processed = processed.replace('\n', " ");
-        debug!("2. After line break normalization: {:?}", processed);
 
         // Apply user-defined word overrides
-        processed = self.apply_word_overrides(&processed);
-        debug!("3. After word overrides: {:?}", processed);
+        let (processed_after_overrides, override_count) = self.apply_word_overrides_with_count(&processed);
+        let changed_after_overrides = processed_after_overrides != processed;
+        processed = processed_after_overrides;
+        
+        if changed_after_overrides {
+            debug!("│   ↓ word_overrides ({} applied)", override_count);
+            debug!("│  → {:?}", processed);
+        }
 
         // Apply built-in speech-to-text replacements
-        processed = self.apply_speech_replacements(&processed);
-        debug!("4. After speech replacements: {:?}", processed);
+        let (processed_after_speech, speech_count) = self.apply_speech_replacements_with_count(&processed);
+        let changed_after_speech = processed_after_speech != processed;
+        processed = processed_after_speech;
+        
+        if changed_after_speech {
+            debug!("│   ↓ speech_replacements ({} applied)", speech_count);
+            debug!("│  → {:?}", processed);
+        }
 
         // Collapse multiple spaces
         let space_regex = Regex::new(r" +").unwrap();
         processed = space_regex.replace_all(&processed, " ").to_string();
-        debug!("5. After space collapsing: {:?}", processed);
 
         // Trim whitespace
         let final_result = processed.trim().to_string();
-        debug!("6. Final result: {:?}", final_result);
-        debug!("=== End Preprocessing ===");
+        
+        if !changed_after_overrides && !changed_after_speech {
+            debug!("│   (no transformations applied)");
+        }
+        
+        debug!("└─ OUT: {:?}", final_result);
         
         final_result
     }
 
-    fn apply_word_overrides(&self, text: &str) -> String {
+    fn apply_word_overrides_with_count(&self, text: &str) -> (String, usize) {
         let mut result = text.to_string();
+        let mut count = 0;
 
         if self.word_overrides.is_empty() {
-            debug!("   → No word overrides configured");
-            return result;
+            return (result, 0);
         }
 
-        debug!("   → Applying {} word override(s):", self.word_overrides.len());
         for (original, replacement) in &self.word_overrides {
             // Case-insensitive word boundary replacement
             let pattern = format!(r"\b{}\b", regex::escape(original));
@@ -111,15 +125,15 @@ impl TextInjector {
                 let before = result.clone();
                 result = re.replace_all(&result, replacement.as_str()).to_string();
                 if before != result {
-                    debug!("     ✓ {:?} → {:?}", original, replacement);
+                    count += 1;
                 }
             }
         }
 
-        result
+        (result, count)
     }
 
-    fn apply_speech_replacements(&self, text: &str) -> String {
+    fn apply_speech_replacements_with_count(&self, text: &str) -> (String, usize) {
         // Built-in speech-to-text replacements
         let replacements = [
             (r"\bperiod\b", "."),
@@ -163,25 +177,19 @@ impl TextInjector {
         ];
 
         let mut result = text.to_string();
-        let mut applied_count = 0;
+        let mut count = 0;
 
-        debug!("   → Applying built-in speech replacements:");
         for (pattern, replacement) in &replacements {
             if let Ok(re) = Regex::new(&format!("(?i){}", pattern)) {
                 let before = result.clone();
                 result = re.replace_all(&result, *replacement).to_string();
                 if before != result {
-                    debug!("     ✓ {} → {:?}", pattern, replacement);
-                    applied_count += 1;
+                    count += 1;
                 }
             }
         }
-        
-        if applied_count == 0 {
-            debug!("     (no built-in replacements matched)");
-        }
 
-        result
+        (result, count)
     }
 
 
