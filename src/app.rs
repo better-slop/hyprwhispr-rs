@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
 
-use crate::audio::{AudioCapture, AudioFeedback, capture::RecordingSession};
+use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
 use crate::config::ConfigManager;
 use crate::input::{GlobalShortcuts, ShortcutEvent, TextInjector};
 use crate::status::StatusWriter;
@@ -16,7 +16,7 @@ pub struct HyprwhsprApp {
     whisper_manager: WhisperManager,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
-    
+
     // State
     recording_session: Option<RecordingSession>,
     is_processing: bool,
@@ -27,8 +27,7 @@ impl HyprwhsprApp {
         let config = config_manager.get();
 
         // Initialize audio capture
-        let audio_capture = AudioCapture::new()
-            .context("Failed to initialize audio capture")?;
+        let audio_capture = AudioCapture::new().context("Failed to initialize audio capture")?;
 
         // Initialize audio feedback
         let assets_dir = config_manager.get_assets_dir();
@@ -51,7 +50,8 @@ impl HyprwhsprApp {
             config.gpu_layers,
         )?;
 
-        whisper_manager.initialize()
+        whisper_manager
+            .initialize()
             .context("Failed to initialize Whisper")?;
 
         // Initialize text injector
@@ -87,16 +87,14 @@ impl HyprwhsprApp {
         let config = self.config_manager.get();
         let shortcut = config.primary_shortcut.clone();
 
-        std::thread::spawn(move || {
-            match GlobalShortcuts::new(&shortcut) {
-                Ok(shortcuts) => {
-                    if let Err(e) = shortcuts.run(shortcut_tx) {
-                        error!("Global shortcuts error: {}", e);
-                    }
+        std::thread::spawn(move || match GlobalShortcuts::new(&shortcut) {
+            Ok(shortcuts) => {
+                if let Err(e) = shortcuts.run(shortcut_tx) {
+                    error!("Global shortcuts error: {}", e);
                 }
-                Err(e) => {
-                    error!("Failed to initialize global shortcuts: {}", e);
-                }
+            }
+            Err(e) => {
+                error!("Failed to initialize global shortcuts: {}", e);
             }
         });
 
@@ -136,7 +134,9 @@ impl HyprwhsprApp {
         self.audio_feedback.play_start_sound()?;
 
         // Start audio capture
-        let session = self.audio_capture.start_recording()
+        let session = self
+            .audio_capture
+            .start_recording()
             .context("Failed to start recording")?;
 
         self.recording_session = Some(session);
@@ -151,7 +151,9 @@ impl HyprwhsprApp {
         info!("🛑 Stopping recording...");
 
         // Take ownership of the recording session
-        let session = self.recording_session.take()
+        let session = self
+            .recording_session
+            .take()
             .context("No active recording session")?;
 
         // Play stop sound
@@ -161,8 +163,7 @@ impl HyprwhsprApp {
         self.status_writer.set_recording(false)?;
 
         // Stop recording and get audio data
-        let audio_data = session.stop()
-            .context("Failed to stop recording")?;
+        let audio_data = session.stop().context("Failed to stop recording")?;
 
         // Process the audio
         if !audio_data.is_empty() {

@@ -14,8 +14,7 @@ impl StatusWriter {
             .config_dir()
             .to_path_buf();
 
-        fs::create_dir_all(&config_dir)
-            .context("Failed to create config directory")?;
+        fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
         Ok(Self {
             status_file: config_dir.join("recording_status"),
@@ -27,8 +26,7 @@ impl StatusWriter {
     /// - recording=false: removes the file (matches Python behavior)
     pub fn set_recording(&self, recording: bool) -> Result<()> {
         if recording {
-            fs::write(&self.status_file, "true")
-                .context("Failed to write recording status")?;
+            fs::write(&self.status_file, "true").context("Failed to write recording status")?;
             tracing::debug!("Set recording status: true");
         } else {
             // Remove file when not recording to avoid stale state

@@ -1,9 +1,14 @@
+use crate::logging::{record_text_pipeline, PipelineStepRecord, TextPipelineRecord};
 use anyhow::{Context, Result};
 use arboard::Clipboard;
 use enigo::{Enigo, Keyboard, Settings};
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use tracing::{debug, info, warn};
+
+static SPACE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r" +").expect("valid space collapse regex"));
 
 pub struct TextInjector {
     enigo: Enigo,
@@ -20,9 +25,8 @@ impl TextInjector {
     ) -> Result<Self> {
         let enigo = Enigo::new(&Settings::default())
             .context("Failed to initialize Enigo for text injection")?;
-        
-        let clipboard = Clipboard::new()
-            .context("Failed to initialize clipboard")?;
+
+        let clipboard = Clipboard::new().context("Failed to initialize clipboard")?;
 
         Ok(Self {
             enigo,
@@ -53,60 +57,94 @@ impl TextInjector {
         }
 
         // Inject text directly with enigo
-        self.enigo.text(&processed)
+        self.enigo
+            .text(&processed)
             .context("Failed to inject text with Enigo")?;
 
         debug!("Text injected successfully");
         Ok(())
     }
 
-
-
     fn preprocess_text(&self, text: &str) -> String {
-        debug!("┌─ 📝 Text Transformation Pipeline");
-        debug!("│  IN: {:?}", text);
-        
-        let mut processed = text.to_string();
-        let original = text.to_string();
+        let mut steps = if tracing::level_enabled!(tracing::Level::DEBUG) {
+            Some(Vec::new())
+        } else {
+            None
+        };
+        let mut current = text.to_string();
 
-        // Normalize line breaks to spaces to avoid unintended Enter
-        processed = processed.replace("\r\n", " ");
-        processed = processed.replace('\r', " ");
-        processed = processed.replace('\n', " ");
+        let normalized = normalize_line_breaks(&current);
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "normalize_line_breaks",
+                current.clone(),
+                normalized.clone(),
+                None,
+            ));
+        }
+        current = normalized;
 
-        // Apply user-defined word overrides
-        let (processed_after_overrides, override_count) = self.apply_word_overrides_with_count(&processed);
-        let changed_after_overrides = processed_after_overrides != processed;
-        processed = processed_after_overrides;
-        
-        if changed_after_overrides {
-            debug!("│   ↓ word_overrides ({} applied)", override_count);
-            debug!("│  → {:?}", processed);
+        let (after_overrides, override_count) = self.apply_word_overrides_with_count(&current);
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "word_overrides",
+                current.clone(),
+                after_overrides.clone(),
+                if override_count > 0 {
+                    Some(override_count)
+                } else {
+                    None
+                },
+            ));
+        }
+        current = after_overrides;
+
+        let (after_speech, speech_count) = self.apply_speech_replacements_with_count(&current);
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "speech_replacements",
+                current.clone(),
+                after_speech.clone(),
+                if speech_count > 0 {
+                    Some(speech_count)
+                } else {
+                    None
+                },
+            ));
+        }
+        current = after_speech;
+
+        let collapsed = collapse_spaces(&current);
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "collapse_spaces",
+                current.clone(),
+                collapsed.clone(),
+                None,
+            ));
+        }
+        current = collapsed;
+
+        let trimmed = current.trim().to_string();
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "trim_whitespace",
+                current.clone(),
+                trimmed.clone(),
+                None,
+            ));
         }
 
-        // Apply built-in speech-to-text replacements
-        let (processed_after_speech, speech_count) = self.apply_speech_replacements_with_count(&processed);
-        let changed_after_speech = processed_after_speech != processed;
-        processed = processed_after_speech;
-        
-        if changed_after_speech {
-            debug!("│   ↓ speech_replacements ({} applied)", speech_count);
-            debug!("│  → {:?}", processed);
+        let final_result = trimmed;
+
+        if let Some(logged_steps) = steps {
+            record_text_pipeline(TextPipelineRecord::new(
+                text.to_string(),
+                final_result.clone(),
+                logged_steps,
+            ));
         }
 
-        // Collapse multiple spaces
-        let space_regex = Regex::new(r" +").unwrap();
-        processed = space_regex.replace_all(&processed, " ").to_string();
-
-        // Trim whitespace
-        let final_result = processed.trim().to_string();
-        
-        if !changed_after_overrides && !changed_after_speech {
-            debug!("│   (no transformations applied)");
-        }
-        
-        debug!("└─ OUT: {:?}", final_result);
-        
         final_result
     }
 
@@ -191,6 +229,19 @@ impl TextInjector {
 
         (result, count)
     }
+}
 
+fn normalize_line_breaks(input: &str) -> String {
+    if input.contains(['\r', '\n']) {
+        input
+            .replace("\r\n", " ")
+            .replace('\r', " ")
+            .replace('\n', " ")
+    } else {
+        input.to_string()
+    }
+}
 
+fn collapse_spaces(input: &str) -> String {
+    SPACE_REGEX.replace_all(input, " ").to_string()
 }

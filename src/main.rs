@@ -1,5 +1,5 @@
 use anyhow::Result;
-use hyprwhspr_rs::{ConfigManager, HyprwhsprApp};
+use hyprwhspr_rs::{logging::TextPipelineFormatter, ConfigManager, HyprwhsprApp};
 use std::env;
 use tokio::signal;
 use tracing::info;
@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "hyprwhspr=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().event_format(TextPipelineFormatter::new()))
         .init();
 
     // Check for test mode
@@ -37,10 +37,10 @@ async fn main() -> Result<()> {
 
     // Initialize application
     let app = HyprwhsprApp::new(config_manager)?;
-    
+
     // Set up signal handling
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
-    
+
     #[cfg(unix)]
     {
         tokio::spawn(async move {
@@ -56,11 +56,11 @@ async fn main() -> Result<()> {
                     info!("Received SIGTERM");
                 }
             }
-            
+
             let _ = shutdown_tx.send(());
         });
     }
-    
+
     #[cfg(not(unix))]
     {
         tokio::spawn(async move {
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
             let _ = shutdown_tx.send(());
         });
     }
-    
+
     // Run app until shutdown signal
     tokio::select! {
         result = app.run() => {
@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
 async fn run_test_mode() -> Result<()> {
     use hyprwhspr_rs::app_test::HyprwhsprAppTest;
     use tokio::io::{AsyncBufReadExt, BufReader};
-    
+
     info!("🧪 Test Mode - Press Enter to toggle recording, Ctrl+C to quit");
     info!("{}", "=".repeat(50));
 
@@ -105,7 +105,7 @@ async fn run_test_mode() -> Result<()> {
 
     // Initialize application
     let mut app = HyprwhsprAppTest::new(config_manager)?;
-    
+
     info!("");
     info!("📝 Instructions:");
     info!("   1. Press Enter to START recording");
@@ -120,7 +120,7 @@ async fn run_test_mode() -> Result<()> {
 
     // Set up signal handling
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
-    
+
     tokio::spawn(async move {
         signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
         info!("Received SIGINT (Ctrl+C)");

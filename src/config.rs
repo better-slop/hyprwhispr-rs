@@ -53,11 +53,11 @@ pub struct Config {
 }
 
 fn default_gpu_layers() -> i32 {
-    999  // Offload all layers to GPU by default
+    999 // Offload all layers to GPU by default
 }
 
 fn default_primary_shortcut() -> String {
-    "SUPER+ALT+R".to_string()  // R for Rust version (Python uses D)
+    "SUPER+ALT+R".to_string() // R for Rust version (Python uses D)
 }
 
 fn default_model() -> String {
@@ -118,23 +118,19 @@ impl ConfigManager {
             .config_dir()
             .to_path_buf();
 
-        fs::create_dir_all(&config_dir)
-            .context("Failed to create config directory")?;
+        fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
         let config_path = config_dir.join("config.json");
 
         let config = if config_path.exists() {
-            let content = fs::read_to_string(&config_path)
-                .context("Failed to read config file")?;
-            serde_json::from_str(&content)
-                .context("Failed to parse config file")?
+            let content = fs::read_to_string(&config_path).context("Failed to read config file")?;
+            serde_json::from_str(&content).context("Failed to parse config file")?
         } else {
             let default_config = Config::default();
             // Save default config
             let json = serde_json::to_string_pretty(&default_config)
                 .context("Failed to serialize default config")?;
-            fs::write(&config_path, json)
-                .context("Failed to write default config")?;
+            fs::write(&config_path, json).context("Failed to write default config")?;
             tracing::info!("Created default config at: {:?}", config_path);
             default_config
         };
@@ -152,10 +148,9 @@ impl ConfigManager {
     }
 
     pub fn save(&self) -> Result<()> {
-        let json = serde_json::to_string_pretty(&self.config)
-            .context("Failed to serialize config")?;
-        fs::write(&self.config_path, json)
-            .context("Failed to write config file")?;
+        let json =
+            serde_json::to_string_pretty(&self.config).context("Failed to serialize config")?;
+        fs::write(&self.config_path, json).context("Failed to write config file")?;
         tracing::info!("Saved config to: {:?}", self.config_path);
         Ok(())
     }
@@ -163,7 +158,7 @@ impl ConfigManager {
     pub fn get_model_path(&self) -> PathBuf {
         // Try system models first, then fall back to local
         let system_models = PathBuf::from("/usr/share/whisper/models");
-        
+
         let models_dir = if system_models.exists() {
             system_models
         } else {
@@ -192,7 +187,7 @@ impl ConfigManager {
         // Priority order:
         // 1. System-wide installation (AUR package)
         // 2. User's local build
-        
+
         let system_binary = PathBuf::from("/usr/bin/whisper-cli");
         if system_binary.exists() {
             return system_binary;
@@ -201,7 +196,7 @@ impl ConfigManager {
         // Fall back to local build
         let home = std::env::var("HOME").expect("HOME not set");
         let local_dir = PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp");
-        
+
         let candidates = vec![
             local_dir.join("build/bin/whisper-cli"),
             local_dir.join("main"),

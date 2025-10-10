@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::audio::{AudioCapture, AudioFeedback, capture::RecordingSession};
+use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
 use crate::config::ConfigManager;
 use crate::input::TextInjector;
 use crate::status::StatusWriter;
@@ -17,7 +17,7 @@ pub struct HyprwhsprAppTest {
     whisper_manager: WhisperManager,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
-    
+
     // State
     recording_session: Option<RecordingSession>,
     is_processing: bool,
@@ -28,8 +28,7 @@ impl HyprwhsprAppTest {
         let config = config_manager.get();
 
         // Initialize audio capture
-        let audio_capture = AudioCapture::new()
-            .context("Failed to initialize audio capture")?;
+        let audio_capture = AudioCapture::new().context("Failed to initialize audio capture")?;
 
         // Initialize audio feedback
         let assets_dir = config_manager.get_assets_dir();
@@ -52,7 +51,8 @@ impl HyprwhsprAppTest {
             config.gpu_layers,
         )?;
 
-        whisper_manager.initialize()
+        whisper_manager
+            .initialize()
             .context("Failed to initialize Whisper")?;
 
         // Initialize text injector
@@ -102,7 +102,9 @@ impl HyprwhsprAppTest {
         self.audio_feedback.play_start_sound()?;
 
         // Start audio capture
-        let session = self.audio_capture.start_recording()
+        let session = self
+            .audio_capture
+            .start_recording()
             .context("Failed to start recording")?;
 
         self.recording_session = Some(session);
@@ -119,7 +121,9 @@ impl HyprwhsprAppTest {
         info!("🛑 Stopping recording...");
 
         // Take ownership of the recording session
-        let session = self.recording_session.take()
+        let session = self
+            .recording_session
+            .take()
             .context("No active recording session")?;
 
         // Play stop sound
@@ -129,8 +133,7 @@ impl HyprwhsprAppTest {
         self.status_writer.set_recording(false)?;
 
         // Stop recording and get audio data
-        let audio_data = session.stop()
-            .context("Failed to stop recording")?;
+        let audio_data = session.stop().context("Failed to stop recording")?;
 
         // Process the audio
         if !audio_data.is_empty() {
@@ -163,7 +166,7 @@ impl HyprwhsprAppTest {
         // Inject text
         let text_injector = Arc::clone(&self.text_injector);
         let mut injector = text_injector.lock().await;
-        
+
         info!("⌨️  Injecting text into active application...");
         injector.inject_text(&transcription).await?;
         info!("✅ Text injected successfully!");

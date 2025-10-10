@@ -73,10 +73,7 @@ impl AudioCapture {
 
         info!("✅ Audio recording started");
 
-        Ok(RecordingSession {
-            stream,
-            audio_data,
-        })
+        Ok(RecordingSession { stream, audio_data })
     }
 
     pub fn get_available_devices() -> Result<Vec<String>> {
@@ -127,10 +124,10 @@ impl RecordingSession {
             // Calculate RMS level for last 1024 samples
             let start = data.len().saturating_sub(1024);
             let samples = &data[start..];
-            
+
             let sum_squares: f32 = samples.iter().map(|s| s * s).sum();
             let rms = (sum_squares / samples.len() as f32).sqrt();
-            
+
             // Scale for better visualization (0.0 to 1.0)
             (rms * 10.0).min(1.0)
         } else {

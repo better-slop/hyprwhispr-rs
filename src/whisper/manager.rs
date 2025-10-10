@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::fs;
 use tracing::{debug, info, warn};
 
 pub struct WhisperManager {
@@ -49,7 +49,7 @@ impl WhisperManager {
 
         // Detect GPU support
         let gpu_info = Self::detect_gpu();
-        
+
         info!("✅ Whisper initialized");
         info!("   Model: {:?}", self.model_path);
         info!("   Binary: {:?}", self.binary_path);
@@ -65,22 +65,22 @@ impl WhisperManager {
 
     fn detect_gpu() -> String {
         use std::process::Command;
-        
+
         // Check NVIDIA
         if Command::new("nvidia-smi").output().is_ok() {
             return "NVIDIA GPU detected".to_string();
         }
-        
+
         // Check AMD ROCm
         if Command::new("rocm-smi").output().is_ok() {
             return "AMD GPU (ROCm) detected".to_string();
         }
-        
+
         // Check if /opt/rocm exists
         if std::path::Path::new("/opt/rocm").exists() {
             return "AMD GPU (ROCm) available".to_string();
         }
-        
+
         "CPU only (no GPU detected)".to_string()
     }
 
@@ -93,9 +93,11 @@ impl WhisperManager {
         info!("🧠 Transcribing {:.2}s of audio...", duration_secs);
 
         // Save audio to temporary WAV file
-        let temp_wav = self.temp_dir.join(format!("audio_{}.wav", std::process::id()));
+        let temp_wav = self
+            .temp_dir
+            .join(format!("audio_{}.wav", std::process::id()));
         self.save_audio_as_wav(&audio_data, &temp_wav)?;
-        
+
         debug!("Saved audio to: {:?}", temp_wav);
 
         // Run whisper.cpp CLI
@@ -164,18 +166,23 @@ impl WhisperManager {
 
     async fn run_whisper_cli(&self, audio_file: &PathBuf) -> Result<String> {
         let mut cmd = Command::new(&self.binary_path);
-        
+
         // Basic args
         cmd.args(&[
-            "-m", self.model_path.to_str().unwrap(),
-            "-f", audio_file.to_str().unwrap(),
+            "-m",
+            self.model_path.to_str().unwrap(),
+            "-f",
+            audio_file.to_str().unwrap(),
             "--output-txt",
-            "--language", "en",
-            "--threads", &self.threads.to_string(),
-            "--prompt", &self.whisper_prompt,
-            "--no-timestamps",  // Just plain text, no timestamps
+            "--language",
+            "en",
+            "--threads",
+            &self.threads.to_string(),
+            "--prompt",
+            &self.whisper_prompt,
+            "--no-timestamps", // Just plain text, no timestamps
         ]);
-        
+
         // GPU control: AUR version uses --no-gpu flag (opposite logic)
         // If gpu_layers == 0, disable GPU. Otherwise let it use GPU by default
         if self.gpu_layers == 0 {
@@ -184,21 +191,23 @@ impl WhisperManager {
         } else {
             debug!("GPU enabled (will use GPU if available)");
         }
-        
+
         debug!("Running whisper: {:?}", cmd);
-        
-        let output = cmd.output()
-            .context("Failed to execute whisper binary")?;
+
+        let output = cmd.output().context("Failed to execute whisper binary")?;
 
         // Log whisper output for debugging
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        
+
         debug!("Whisper stdout: {}", stdout);
         debug!("Whisper stderr: {}", stderr);
 
         if !output.status.success() {
-            warn!("Whisper command failed with exit code: {:?}", output.status.code());
+            warn!(
+                "Whisper command failed with exit code: {:?}",
+                output.status.code()
+            );
             warn!("Stderr: {}", stderr);
             return Err(anyhow::anyhow!("Whisper failed: {}", stderr));
         }
@@ -208,16 +217,21 @@ impl WhisperManager {
         if txt_file.exists() {
             let transcription = fs::read_to_string(&txt_file)?;
             let _ = fs::remove_file(&txt_file);
-            
+
             if transcription.trim().is_empty() {
-                warn!("Transcription file was empty. WAV file saved at: {:?}", audio_file);
-                info!("You can test manually with: {} -m {} -f {:?} -ngl {}", 
-                    self.binary_path.display(), 
+                warn!(
+                    "Transcription file was empty. WAV file saved at: {:?}",
+                    audio_file
+                );
+                info!(
+                    "You can test manually with: {} -m {} -f {:?} -ngl {}",
+                    self.binary_path.display(),
                     self.model_path.display(),
                     audio_file,
-                    self.gpu_layers);
+                    self.gpu_layers
+                );
             }
-            
+
             Ok(transcription.trim().to_string())
         } else {
             // Fallback to stdout

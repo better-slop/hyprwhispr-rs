@@ -51,7 +51,7 @@ impl GlobalShortcuts {
             // Check each device
             let target_keys = &self.target_keys;
             let shortcut_name = &self.shortcut_name;
-            
+
             for device in &mut self.devices {
                 // Fetch events from this device
                 match device.fetch_events() {
@@ -60,7 +60,7 @@ impl GlobalShortcuts {
                             match event.kind() {
                                 InputEventKind::Key(key) => {
                                     let value = event.value();
-                                    
+
                                     match value {
                                         // Key pressed
                                         1 => {
@@ -70,17 +70,25 @@ impl GlobalShortcuts {
                                             // Check if target combination is pressed
                                             if target_keys.is_subset(&pressed_keys) {
                                                 let now = Instant::now();
-                                                
+
                                                 // Debounce: only trigger if enough time has passed
-                                                if now.duration_since(last_trigger) > debounce_duration {
-                                                    info!("✨ Shortcut triggered: {}", shortcut_name);
+                                                if now.duration_since(last_trigger)
+                                                    > debounce_duration
+                                                {
+                                                    info!(
+                                                        "✨ Shortcut triggered: {}",
+                                                        shortcut_name
+                                                    );
                                                     last_trigger = now;
 
                                                     // Send event (non-blocking)
                                                     if let Err(e) = tx.try_send(ShortcutEvent {
                                                         triggered_at: now,
                                                     }) {
-                                                        warn!("Failed to send shortcut event: {}", e);
+                                                        warn!(
+                                                            "Failed to send shortcut event: {}",
+                                                            e
+                                                        );
                                                     }
                                                 } else {
                                                     debug!("Shortcut debounced (too soon)");
@@ -122,8 +130,8 @@ impl GlobalShortcuts {
 
         for part in shortcut.split('+') {
             let part = part.trim().to_uppercase();
-            let key = Self::parse_key(&part)
-                .with_context(|| format!("Failed to parse key: {}", part))?;
+            let key =
+                Self::parse_key(&part).with_context(|| format!("Failed to parse key: {}", part))?;
             keys.insert(key);
         }
 

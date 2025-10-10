@@ -3,6 +3,7 @@ pub mod app_test;
 pub mod audio;
 pub mod config;
 pub mod input;
+pub mod logging;
 pub mod status;
 pub mod whisper;
 

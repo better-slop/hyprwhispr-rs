@@ -119,18 +119,16 @@ impl AudioFeedback {
 
     fn play_sound_blocking(path: &PathBuf, volume: f32) -> Result<()> {
         // Create output stream
-        let (_stream, stream_handle) = OutputStream::try_default()
-            .context("Failed to open audio output")?;
+        let (_stream, stream_handle) =
+            OutputStream::try_default().context("Failed to open audio output")?;
 
         // Create sink
-        let sink = Sink::try_new(&stream_handle)
-            .context("Failed to create audio sink")?;
+        let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
 
         // Load and decode audio file
-        let file = File::open(path)
-            .with_context(|| format!("Failed to open audio file: {:?}", path))?;
-        let source = Decoder::new(BufReader::new(file))
-            .context("Failed to decode audio file")?;
+        let file =
+            File::open(path).with_context(|| format!("Failed to open audio file: {:?}", path))?;
+        let source = Decoder::new(BufReader::new(file)).context("Failed to decode audio file")?;
 
         // Set volume and play
         sink.set_volume(volume);

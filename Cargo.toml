@@ -40,6 +40,8 @@ directories = "5"
 
 # Text processing
 regex = "1"
+similar = "2"
+owo-colors = { version = "4", features = ["supports-colors"] }
 
 [features]
 default = []
