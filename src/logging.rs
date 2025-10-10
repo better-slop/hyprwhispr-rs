@@ -2,19 +2,19 @@ use owo_colors::OwoColorize;
 use serde::{Deserialize, Serialize};
 use similar::{ChangeTag, TextDiff};
 use std::fmt;
-use tracing::Subscriber;
+use time::{format_description::FormatItem, macros::format_description, OffsetDateTime};
+use tracing::{Level, Subscriber};
 use tracing_subscriber::{
-    fmt::{
-        format::{self, FormatEvent, Writer},
-        time::SystemTime,
-        FmtContext,
-    },
+    fmt::{format::Writer, FmtContext, FormatEvent, FormatFields},
     registry::LookupSpan,
 };
 
 const PIPELINE_TARGET: &str = "hyprwhspr::text_pipeline";
 const MAX_DIFF_CHARS: usize = 2048;
 const PREVIEW_CHAR_LIMIT: usize = 160;
+const TARGET_GUTTER_WIDTH: usize = 28;
+const TIMESTAMP_FORMAT: &[FormatItem<'_>] =
+    format_description!("[year]-[month]-[day]-[hour]:[minute]:[second]");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextPipelineRecord {
@@ -92,14 +92,14 @@ impl PipelineStepRecord {
     }
 
     fn render_lines(&self, use_color: bool) -> Vec<String> {
+        if !self.applied {
+            return Vec::new();
+        }
+
         let mut lines = Vec::new();
-        let summary = if self.applied {
-            match self.change_count {
-                Some(count) if count > 0 => format!("• {} (applied ×{})", self.name, count),
-                _ => format!("• {} (applied)", self.name),
-            }
-        } else {
-            format!("• {} (no change)", self.name)
+        let summary = match self.change_count {
+            Some(count) if count > 0 => format!("• {} (applied ×{})", self.name, count),
+            _ => format!("• {} (applied)", self.name),
         };
         lines.push(summary);
 
@@ -107,7 +107,7 @@ impl PipelineStepRecord {
             for diff in diff_lines {
                 lines.push(format!("  {}", diff));
             }
-        } else if self.applied {
+        } else {
             lines.push(format!("  - {}", preview_value(&self.before, use_color)));
             lines.push(format!("  + {}", preview_value(&self.after, use_color)));
         }
@@ -221,28 +221,24 @@ impl tracing::field::Visit for PipelineEventVisitor {
     }
 }
 
-pub struct TextPipelineFormatter {
-    inner: format::Format<format::Full, SystemTime>,
-}
+pub struct TextPipelineFormatter;
 
 impl Default for TextPipelineFormatter {
     fn default() -> Self {
-        Self {
-            inner: format::Format::default(),
-        }
+        Self
     }
 }
 
 impl TextPipelineFormatter {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
 impl<S, N> FormatEvent<S, N> for TextPipelineFormatter
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
-    N: for<'writer> format::FormatFields<'writer> + 'static,
+    N: for<'writer> FormatFields<'writer> + 'static,
 {
     fn format_event(
         &self,
@@ -250,41 +246,32 @@ where
         mut writer: Writer<'_>,
         event: &tracing::Event<'_>,
     ) -> fmt::Result {
-        if event.metadata().target() == PIPELINE_TARGET {
+        let metadata = event.metadata();
+        let use_color = writer.has_ansi_escapes();
+
+        write_prefix(&mut writer, metadata, use_color)?;
+        ctx.format_fields(writer.by_ref(), event)?;
+        writer.write_char('\n')?;
+
+        if metadata.target() == PIPELINE_TARGET {
             let mut visitor = PipelineEventVisitor::default();
             event.record(&mut visitor);
             if let Some(json) = visitor.pipeline_json {
                 match serde_json::from_str::<TextPipelineRecord>(&json) {
                     Ok(record) => {
-                        let mut header_buf = String::new();
-                        let header_writer = Writer::new(&mut header_buf);
-                        self.inner.format_event(ctx, header_writer, event)?;
-
-                        if let Some(idx) = header_buf.find(" pipeline_json=") {
-                            header_buf.truncate(idx);
-                        }
-
-                        writer.write_str(&header_buf)?;
+                        writer.write_str(&record.render_pretty(use_color))?;
                         writer.write_char('\n')?;
-                        writer.write_str(&record.render_pretty(writer.has_ansi_escapes()))?;
-                        writer.write_char('\n')?;
-                        return Ok(());
                     }
-                    Err(e) => {
-                        let mut header_buf = String::new();
-                        let header_writer = Writer::new(&mut header_buf);
-                        self.inner.format_event(ctx, header_writer, event)?;
-                        writer.write_str(&header_buf)?;
+                    Err(err) => {
+                        writer.write_str("│ Failed to render text pipeline: ")?;
+                        writer.write_str(&err.to_string())?;
                         writer.write_char('\n')?;
-                        writer.write_str(&format!("│ Failed to render text pipeline: {e}"))?;
-                        writer.write_char('\n')?;
-                        return Ok(());
                     }
                 }
             }
         }
 
-        self.inner.format_event(ctx, writer, event)
+        Ok(())
     }
 }
 
@@ -308,4 +295,55 @@ pub fn record_text_pipeline(record: TextPipelineRecord) {
             "text transformation pipeline (serialization failure)"
         );
     }
+}
+
+fn write_prefix(
+    writer: &mut Writer<'_>,
+    metadata: &tracing::Metadata<'_>,
+    use_color: bool,
+) -> fmt::Result {
+    let timestamp = format_timestamp();
+    let timestamp = if use_color {
+        timestamp.dimmed().to_string()
+    } else {
+        timestamp
+    };
+    writer.write_str(&timestamp)?;
+    writer.write_char(' ')?;
+
+    let level_text = format!("{:>5}", metadata.level());
+    let level_text = if use_color {
+        color_level(&level_text, *metadata.level())
+    } else {
+        level_text
+    };
+    writer.write_str(&level_text)?;
+    writer.write_char(' ')?;
+
+    let target_text = format!("{:<width$}", metadata.target(), width = TARGET_GUTTER_WIDTH);
+    let target_text = if use_color {
+        target_text.blue().dimmed().to_string()
+    } else {
+        target_text
+    };
+    writer.write_str(&target_text)?;
+    writer.write_str(": ")?;
+
+    Ok(())
+}
+
+fn color_level(text: &str, level: Level) -> String {
+    match level {
+        Level::ERROR => text.red().bold().to_string(),
+        Level::WARN => text.yellow().bold().to_string(),
+        Level::INFO => text.green().to_string(),
+        Level::DEBUG => text.cyan().to_string(),
+        Level::TRACE => text.dimmed().to_string(),
+    }
+}
+
+fn format_timestamp() -> String {
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    now.format(&TIMESTAMP_FORMAT)
+        .unwrap_or_else(|_| "0000-00-00-00:00:00".to_string())
 }

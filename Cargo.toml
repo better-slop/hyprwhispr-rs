@@ -42,6 +42,7 @@ directories = "5"
 regex = "1"
 similar = "2"
 owo-colors = { version = "4", features = ["supports-colors"] }
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 
 [features]
 default = []
