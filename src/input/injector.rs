@@ -28,11 +28,14 @@ static CLOSE_PAREN_COMMA_REGEX: LazyLock<Regex> =
 static OPEN_BRACKET_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[\s*,\s*").expect("valid open bracket comma cleanup regex"));
 static CLOSE_BRACKET_COMMA_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r",\s*\]").expect("valid close bracket comma cleanup regex"));
+    LazyLock::new(|| Regex::new(r"\s*,\s*\]").expect("valid close bracket comma cleanup regex"));
 static OPEN_BRACE_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{\s*,\s*").expect("valid open brace comma cleanup regex"));
 static CLOSE_BRACE_COMMA_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r",\s*\}").expect("valid close brace comma cleanup regex"));
+    LazyLock::new(|| Regex::new(r"\s*,\s*\}").expect("valid close brace comma cleanup regex"));
+static SPACE_BEFORE_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[ \t]+([,.;:!?])").expect("valid punctuation spacing cleanup regex")
+});
 
 pub struct TextInjector {
     enigo: Enigo,
@@ -300,7 +303,9 @@ fn clean_control_artifacts(input: &str) -> String {
         CLOSE_BRACKET_COMMA_REGEX.replace_all(&no_open_bracket_comma, " ]");
     let no_open_brace_comma = OPEN_BRACE_COMMA_REGEX.replace_all(&no_close_bracket_comma, "{ ");
     let no_close_brace_comma = CLOSE_BRACE_COMMA_REGEX.replace_all(&no_open_brace_comma, " }");
-    no_close_brace_comma.to_string()
+    SPACE_BEFORE_PUNCT_REGEX
+        .replace_all(&no_close_brace_comma, "$1")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -341,5 +346,24 @@ mod tests {
         let bracket_input = "[ awesome, ]";
         assert_eq!(clean_control_artifacts(brace_input), "{ fuck }");
         assert_eq!(clean_control_artifacts(bracket_input), "[ awesome ]");
+    }
+
+    #[test]
+    fn cleans_demo_sentence_bracket_artifacts() {
+        let input =
+            "Hello, hello, testing 123, [, fuck fuck fuck fuck fuck fuck fuck fuck fuck fuck, ].";
+        assert_eq!(
+            clean_control_artifacts(input),
+            "Hello, hello, testing 123, [ fuck fuck fuck fuck fuck fuck fuck fuck fuck fuck ]"
+        );
+    }
+
+    #[test]
+    fn strips_space_before_punctuation() {
+        let input = "hello , world ! what ; is : this ?";
+        assert_eq!(
+            clean_control_artifacts(input),
+            "hello, world! what; is: this?"
+        );
     }
 }
