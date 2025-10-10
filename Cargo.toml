@@ -26,6 +26,7 @@ rodio = "0.17"
 # Input
 evdev = "0.12"
 arboard = "3"
+enigo = "0.2"
 
 # Whisper (we'll try whisper-rs, but have subprocess fallback)
 whisper-rs = { version = "0.12", optional = true }

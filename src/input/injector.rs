@@ -1,15 +1,15 @@
 use anyhow::{Context, Result};
 use arboard::Clipboard;
+use enigo::{Enigo, Keyboard, Settings};
 use regex::Regex;
 use std::collections::HashMap;
-use std::process::Command;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
 pub struct TextInjector {
+    enigo: Enigo,
     clipboard: Clipboard,
-    shift_paste: bool,
     word_overrides: HashMap<String, String>,
     clipboard_behavior: bool,
     clipboard_clear_delay: Duration,
@@ -17,17 +17,20 @@ pub struct TextInjector {
 
 impl TextInjector {
     pub fn new(
-        shift_paste: bool,
+        _shift_paste: bool,
         word_overrides: HashMap<String, String>,
         clipboard_behavior: bool,
         clipboard_clear_delay: f32,
     ) -> Result<Self> {
+        let enigo = Enigo::new(&Settings::default())
+            .context("Failed to initialize Enigo for text injection")?;
+        
         let clipboard = Clipboard::new()
             .context("Failed to initialize clipboard")?;
 
         Ok(Self {
+            enigo,
             clipboard,
-            shift_paste,
             word_overrides,
             clipboard_behavior,
             clipboard_clear_delay: Duration::from_secs_f32(clipboard_clear_delay),
@@ -45,15 +48,16 @@ impl TextInjector {
 
         info!("Injecting text: {} characters", processed.len());
 
-        // Copy to clipboard
-        self.clipboard.set_text(&processed)
-            .context("Failed to copy text to clipboard")?;
+        // Copy to clipboard (for backup/manual paste if needed)
+        if let Err(e) = self.clipboard.set_text(&processed) {
+            warn!("Failed to copy to clipboard: {}", e);
+        }
 
-        // Small delay to let clipboard propagate
-        sleep(Duration::from_millis(120)).await;
+        // Inject text directly with enigo
+        self.enigo.text(&processed)
+            .context("Failed to inject text with Enigo")?;
 
-        // Simulate paste keystroke with ydotool
-        self.simulate_paste().await?;
+        debug!("Text injected successfully");
 
         // Schedule clipboard clearing if enabled
         if self.clipboard_behavior {
@@ -70,35 +74,7 @@ impl TextInjector {
         Ok(())
     }
 
-    async fn simulate_paste(&self) -> Result<()> {
-        // Linux evdev keycodes:
-        // 29 = LeftCtrl
-        // 42 = LeftShift
-        // 47 = V key
 
-        let result = if self.shift_paste {
-            // Ctrl+Shift+V (works in terminals)
-            Command::new("ydotool")
-                .args(&["key", "29:1", "42:1", "47:1", "47:0", "42:0", "29:0"])
-                .output()
-                .context("Failed to execute ydotool")?
-        } else {
-            // Ctrl+V (traditional paste)
-            Command::new("ydotool")
-                .args(&["key", "29:1", "47:1", "47:0", "29:0"])
-                .output()
-                .context("Failed to execute ydotool")?
-        };
-
-        if !result.status.success() {
-            let stderr = String::from_utf8_lossy(&result.stderr);
-            warn!("ydotool paste failed: {}", stderr);
-            return Err(anyhow::anyhow!("ydotool paste failed: {}", stderr));
-        }
-
-        debug!("Paste keystroke simulated successfully");
-        Ok(())
-    }
 
     fn preprocess_text(&self, text: &str) -> String {
         let mut processed = text.to_string();
@@ -190,11 +166,5 @@ impl TextInjector {
         result
     }
 
-    pub fn check_ydotool_available() -> bool {
-        Command::new("which")
-            .arg("ydotool")
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-    }
+
 }
