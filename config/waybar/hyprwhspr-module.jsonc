@@ -1,0 +1,13 @@
+{
+  "custom/hyprwhspr-rs": {
+    "format": "{}",
+    "exec": "/usr/lib/hyprwhspr-rs/config/hyprland/hyprwhspr-rs-tray.sh status",
+    "interval": 1,
+    "return-type": "json",
+    "exec-on-event": true,
+    "on-click": "/usr/lib/hyprwhspr-rs/config/hyprland/hyprwhspr-rs-tray.sh toggle",
+    "on-click-right": "/usr/lib/hyprwhspr-rs/config/hyprland/hyprwhspr-rs-tray.sh start",
+    "on-click-middle": "/usr/lib/hyprwhspr-rs/config/hyprland/hyprwhspr-rs-tray.sh restart",
+    "tooltip": true
+  }
+}

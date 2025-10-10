@@ -1,0 +1,17 @@
+[Unit]
+Description=hyprwhspr-rs Voice Dictation Service (Rust)
+After=graphical-session.target pipewire.service
+Wants=ydotool.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/lib/hyprwhspr-rs/bin/hyprwhspr-rs
+Environment=HYPRWHSPR_ROOT=/usr/lib/hyprwhspr-rs
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
