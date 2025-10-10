@@ -28,11 +28,11 @@ static CLOSE_PAREN_COMMA_REGEX: LazyLock<Regex> =
 static OPEN_BRACKET_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[\s*,\s*").expect("valid open bracket comma cleanup regex"));
 static CLOSE_BRACKET_COMMA_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s*,\s*\]").expect("valid close bracket comma cleanup regex"));
+    LazyLock::new(|| Regex::new(r",\s*\]").expect("valid close bracket comma cleanup regex"));
 static OPEN_BRACE_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{\s*,\s*").expect("valid open brace comma cleanup regex"));
 static CLOSE_BRACE_COMMA_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s*,\s*\}").expect("valid close brace comma cleanup regex"));
+    LazyLock::new(|| Regex::new(r",\s*\}").expect("valid close brace comma cleanup regex"));
 
 pub struct TextInjector {
     enigo: Enigo,
@@ -333,5 +333,13 @@ mod tests {
             clean_control_artifacts(brace_list),
             "{ alpha, beta, gamma }"
         );
+    }
+
+    #[test]
+    fn removes_clause_commas_before_closing_delimiter() {
+        let brace_input = "{ fuck, }";
+        let bracket_input = "[ awesome, ]";
+        assert_eq!(clean_control_artifacts(brace_input), "{ fuck }");
+        assert_eq!(clean_control_artifacts(bracket_input), "[ awesome ]");
     }
 }
