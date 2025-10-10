@@ -3,24 +3,20 @@ use arboard::Clipboard;
 use enigo::{Enigo, Keyboard, Settings};
 use regex::Regex;
 use std::collections::HashMap;
-use std::time::Duration;
-use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
 pub struct TextInjector {
     enigo: Enigo,
     clipboard: Clipboard,
     word_overrides: HashMap<String, String>,
-    clipboard_behavior: bool,
-    clipboard_clear_delay: Duration,
+    auto_copy_clipboard: bool,
 }
 
 impl TextInjector {
     pub fn new(
         _shift_paste: bool,
         word_overrides: HashMap<String, String>,
-        clipboard_behavior: bool,
-        clipboard_clear_delay: f32,
+        auto_copy_clipboard: bool,
     ) -> Result<Self> {
         let enigo = Enigo::new(&Settings::default())
             .context("Failed to initialize Enigo for text injection")?;
@@ -32,8 +28,7 @@ impl TextInjector {
             enigo,
             clipboard,
             word_overrides,
-            clipboard_behavior,
-            clipboard_clear_delay: Duration::from_secs_f32(clipboard_clear_delay),
+            auto_copy_clipboard,
         })
     }
 
@@ -48,9 +43,13 @@ impl TextInjector {
 
         info!("Injecting text: {} characters", processed.len());
 
-        // Copy to clipboard (for backup/manual paste if needed)
-        if let Err(e) = self.clipboard.set_text(&processed) {
-            warn!("Failed to copy to clipboard: {}", e);
+        // Copy to clipboard (for backup/manual paste if needed) - if enabled
+        if self.auto_copy_clipboard {
+            if let Err(e) = self.clipboard.set_text(&processed) {
+                warn!("Failed to copy to clipboard: {}", e);
+            } else {
+                debug!("Text copied to clipboard");
+            }
         }
 
         // Inject text directly with enigo
@@ -58,19 +57,6 @@ impl TextInjector {
             .context("Failed to inject text with Enigo")?;
 
         debug!("Text injected successfully");
-
-        // Schedule clipboard clearing if enabled
-        if self.clipboard_behavior {
-            let delay = self.clipboard_clear_delay;
-            tokio::spawn(async move {
-                sleep(delay).await;
-                if let Ok(mut clipboard) = Clipboard::new() {
-                    let _ = clipboard.clear();
-                    debug!("Clipboard cleared after delay");
-                }
-            });
-        }
-
         Ok(())
     }
 

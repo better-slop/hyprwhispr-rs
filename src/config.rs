@@ -39,11 +39,8 @@ pub struct Config {
     #[serde(default)]
     pub stop_sound_path: Option<String>,
 
-    #[serde(default)]
-    pub clipboard_behavior: bool,
-
-    #[serde(default = "default_clipboard_delay")]
-    pub clipboard_clear_delay: f32,
+    #[serde(default = "default_auto_copy_clipboard")]
+    pub auto_copy_clipboard: bool,
 
     #[serde(default = "default_shift_paste")]
     pub shift_paste: bool,
@@ -79,8 +76,8 @@ fn default_volume() -> f32 {
     0.3
 }
 
-fn default_clipboard_delay() -> f32 {
-    5.0
+fn default_auto_copy_clipboard() -> bool {
+    true
 }
 
 fn default_shift_paste() -> bool {
@@ -101,8 +98,7 @@ impl Default for Config {
             stop_sound_volume: default_volume(),
             start_sound_path: None,
             stop_sound_path: None,
-            clipboard_behavior: false,
-            clipboard_clear_delay: default_clipboard_delay(),
+            auto_copy_clipboard: default_auto_copy_clipboard(),
             shift_paste: default_shift_paste(),
             audio_device: None,
             gpu_layers: default_gpu_layers(),

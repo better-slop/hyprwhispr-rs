@@ -59,8 +59,7 @@ impl HyprwhsprAppTest {
         let text_injector = TextInjector::new(
             config.shift_paste,
             config.word_overrides.clone(),
-            config.clipboard_behavior,
-            config.clipboard_clear_delay,
+            config.auto_copy_clipboard,
         )?;
 
         // Initialize status writer

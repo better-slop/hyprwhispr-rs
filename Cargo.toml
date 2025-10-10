@@ -25,7 +25,7 @@ rodio = "0.17"
 
 # Input
 evdev = "0.12"
-arboard = "3"
+arboard = { version = "3", features = ["wayland-data-control"] }
 enigo = "0.2"
 
 # Whisper (we'll try whisper-rs, but have subprocess fallback)
@@ -42,7 +42,7 @@ directories = "5"
 regex = "1"
 
 [features]
-default = ["whisper-native"]
+default = []
 whisper-native = ["whisper-rs"]
 
 [profile.release]
