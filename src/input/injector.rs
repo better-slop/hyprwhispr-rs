@@ -21,6 +21,10 @@ static OPEN_PAREN_SPACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\( +").expect("valid open paren space cleanup regex"));
 static CLOSE_PAREN_SPACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r" +\)").expect("valid close paren space cleanup regex"));
+static OPEN_PAREN_COMMA_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(\s*,\s*").expect("valid open paren comma cleanup regex"));
+static CLOSE_PAREN_COMMA_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s*,\s*\)").expect("valid close paren comma cleanup regex"));
 
 pub struct TextInjector {
     enigo: Enigo,
@@ -281,5 +285,7 @@ fn clean_control_artifacts(input: &str) -> String {
     let without_symbol_punct = SYMBOL_PUNCT_REGEX.replace_all(&without_trailing_space, "$1");
     let collapsed_open = OPEN_PAREN_SPACE_REGEX.replace_all(&without_symbol_punct, "(");
     let collapsed_close = CLOSE_PAREN_SPACE_REGEX.replace_all(&collapsed_open, ")");
-    collapsed_close.to_string()
+    let no_open_comma = OPEN_PAREN_COMMA_REGEX.replace_all(&collapsed_close, "(");
+    let no_close_comma = CLOSE_PAREN_COMMA_REGEX.replace_all(&no_open_comma, ")");
+    no_close_comma.to_string()
 }

@@ -181,8 +181,6 @@ impl WhisperManager {
             "--prompt",
             &self.whisper_prompt,
             "--no-timestamps", // Just plain text, no timestamps
-            "--suppress_tokens",
-            "11",
         ]);
 
         // GPU control: AUR version uses --no-gpu flag (opposite logic)
