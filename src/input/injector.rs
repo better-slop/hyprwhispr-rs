@@ -25,6 +25,14 @@ static OPEN_PAREN_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\(\s*,\s*").expect("valid open paren comma cleanup regex"));
 static CLOSE_PAREN_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s*,\s*\)").expect("valid close paren comma cleanup regex"));
+static OPEN_BRACKET_COMMA_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[\s*,\s*").expect("valid open bracket comma cleanup regex"));
+static CLOSE_BRACKET_COMMA_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s*,\s*\]").expect("valid close bracket comma cleanup regex"));
+static OPEN_BRACE_COMMA_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{\s*,\s*").expect("valid open brace comma cleanup regex"));
+static CLOSE_BRACE_COMMA_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s*,\s*\}").expect("valid close brace comma cleanup regex"));
 
 pub struct TextInjector {
     enigo: Enigo,
@@ -287,5 +295,43 @@ fn clean_control_artifacts(input: &str) -> String {
     let collapsed_close = CLOSE_PAREN_SPACE_REGEX.replace_all(&collapsed_open, ")");
     let no_open_comma = OPEN_PAREN_COMMA_REGEX.replace_all(&collapsed_close, "(");
     let no_close_comma = CLOSE_PAREN_COMMA_REGEX.replace_all(&no_open_comma, ")");
-    no_close_comma.to_string()
+    let no_open_bracket_comma = OPEN_BRACKET_COMMA_REGEX.replace_all(&no_close_comma, "[ ");
+    let no_close_bracket_comma =
+        CLOSE_BRACKET_COMMA_REGEX.replace_all(&no_open_bracket_comma, " ]");
+    let no_open_brace_comma = OPEN_BRACE_COMMA_REGEX.replace_all(&no_close_bracket_comma, "{ ");
+    let no_close_brace_comma = CLOSE_BRACE_COMMA_REGEX.replace_all(&no_open_brace_comma, " }");
+    no_close_brace_comma.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removes_parenthesis_commas_and_spaces() {
+        let input = "(, value, )";
+        assert_eq!(clean_control_artifacts(input), "(value)");
+    }
+
+    #[test]
+    fn cleans_bracket_and_brace_commas() {
+        let bracket_input = "[, option, ]";
+        let brace_input = "{, field, }";
+        assert_eq!(clean_control_artifacts(bracket_input), "[ option ]");
+        assert_eq!(clean_control_artifacts(brace_input), "{ field }");
+    }
+
+    #[test]
+    fn keeps_internal_commas_inside_collections() {
+        let bracket_list = "[ first, second, third, ]";
+        let brace_list = "{ alpha, beta, gamma, }";
+        assert_eq!(
+            clean_control_artifacts(bracket_list),
+            "[ first, second, third ]"
+        );
+        assert_eq!(
+            clean_control_artifacts(brace_list),
+            "{ alpha, beta, gamma }"
+        );
+    }
 }
