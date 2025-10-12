@@ -12,5 +12,5 @@ Rust implementation of [hyprwhspr](https://github.com/goodroot/hyprwhspr) - Nati
 2. `cd hyprwhspr-rs`
 3. `cargo build --release`
 4. Run using:
-  - Nice logs with pretty text transformation diffs: `RUST_LOG=debug ./target/release/hyprwhspr-rs --test`
-  - Production release `./target/release/hyprwhspr-rs`
+    - Nice logs with pretty text transformation diffs: `RUST_LOG=debug ./target/release/hyprwhspr-rs --test`
+    - Production release `./target/release/hyprwhspr-rs`
