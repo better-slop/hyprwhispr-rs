@@ -36,6 +36,8 @@ static CLOSE_BRACE_COMMA_REGEX: LazyLock<Regex> =
 static SPACE_BEFORE_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[ \t]+([,.;:!?])").expect("valid punctuation spacing cleanup regex")
 });
+static DUPLICATE_COMMA_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r",(?:\s*,)+").expect("valid duplicate comma cleanup regex"));
 
 pub struct TextInjector {
     enigo: Enigo,
@@ -303,8 +305,9 @@ fn clean_control_artifacts(input: &str) -> String {
         CLOSE_BRACKET_COMMA_REGEX.replace_all(&no_open_bracket_comma, " ]");
     let no_open_brace_comma = OPEN_BRACE_COMMA_REGEX.replace_all(&no_close_bracket_comma, "{ ");
     let no_close_brace_comma = CLOSE_BRACE_COMMA_REGEX.replace_all(&no_open_brace_comma, " }");
-    SPACE_BEFORE_PUNCT_REGEX
-        .replace_all(&no_close_brace_comma, "$1")
+    let no_space_before_punct = SPACE_BEFORE_PUNCT_REGEX.replace_all(&no_close_brace_comma, "$1");
+    DUPLICATE_COMMA_REGEX
+        .replace_all(&no_space_before_punct, ",")
         .to_string()
 }
 
@@ -364,6 +367,15 @@ mod tests {
         assert_eq!(
             clean_control_artifacts(input),
             "hello, world! what; is: this?"
+        );
+    }
+
+    #[test]
+    fn removes_duplicate_commas_from_transcript_artifacts() {
+        let input = "{ fuck fuck fuck fuck, ,, fuck, }.";
+        assert_eq!(
+            clean_control_artifacts(input),
+            "{ fuck fuck fuck fuck, fuck }"
         );
     }
 }

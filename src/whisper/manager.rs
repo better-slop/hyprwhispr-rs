@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use regex::Regex;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -102,19 +103,24 @@ impl WhisperManager {
 
         // Run whisper.cpp CLI
         let transcription = self.run_whisper_cli(&temp_wav).await?;
+        let cleaned_transcription = self.strip_prompt_artifacts(&transcription);
 
-        // Only clean up if transcription succeeded
-        if !transcription.trim().is_empty() {
-            let _ = fs::remove_file(&temp_wav);
-        }
+        // Always clean up after successful transcription pass
+        let _ = fs::remove_file(&temp_wav);
 
-        if transcription.trim().is_empty() {
+        if cleaned_transcription.trim().is_empty() {
             warn!("Whisper returned empty transcription");
         } else {
-            info!("✅ Transcription: {}", transcription);
+            if cleaned_transcription != transcription {
+                debug!(
+                    "Stripped prompt artifacts from transcription: raw='{}', cleaned='{}'",
+                    transcription, cleaned_transcription
+                );
+            }
+            info!("✅ Transcription: {}", cleaned_transcription);
         }
 
-        Ok(transcription)
+        Ok(cleaned_transcription)
     }
 
     fn save_audio_as_wav(&self, audio_data: &[f32], path: &PathBuf) -> Result<()> {
@@ -238,5 +244,48 @@ impl WhisperManager {
             warn!("No .txt file created by whisper, using stdout");
             Ok(stdout.trim().to_string())
         }
+    }
+
+    fn strip_prompt_artifacts(&self, transcription: &str) -> String {
+        let trimmed = transcription.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+
+        if Self::is_prompt_artifact(trimmed, &self.whisper_prompt) {
+            return String::new();
+        }
+
+        trimmed.to_string()
+    }
+
+    fn is_prompt_artifact(transcription: &str, prompt: &str) -> bool {
+        let trimmed_prompt = prompt.trim();
+        if trimmed_prompt.is_empty() {
+            return false;
+        }
+
+        let mut phrases = vec![trimmed_prompt.to_string()];
+        phrases.extend(
+            trimmed_prompt
+                .split(|c| c == '.' || c == '!' || c == '?')
+                .map(str::trim)
+                .filter(|segment| !segment.is_empty())
+                .map(|segment| segment.to_string()),
+        );
+
+        let transcription_core = transcription.trim_matches(|c: char| c.is_ascii_whitespace());
+
+        for phrase in phrases {
+            let escaped = regex::escape(&phrase);
+            let pattern = format!(r#"(?i)^(?:{}\s*[.!?\s"]*)+$"#, escaped);
+            if let Ok(re) = Regex::new(&pattern) {
+                if re.is_match(transcription_core) {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 }
