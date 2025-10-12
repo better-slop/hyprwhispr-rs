@@ -1,4 +1,7 @@
-# hyprwhspr-rs
+<div align="center">
+  <img src="assets/logo.png" alt="hyprwhspr-rs logo" width="200" />
+  <h1>hyprwhspr-rs</h1>
+</div>
 
 Rust implementation of [hyprwhspr](https://github.com/goodroot/hyprwhspr) - Native speech-to-text voice dictation for Hyprland.
 
