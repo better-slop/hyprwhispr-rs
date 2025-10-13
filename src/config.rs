@@ -1,10 +1,17 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use jsonc_parser::{parse_to_serde_value, ParseOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, SystemTime};
+use tokio::sync::watch;
+use tokio::time;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     #[serde(default = "default_primary_shortcut")]
     pub primary_shortcut: String,
@@ -106,9 +113,16 @@ impl Default for Config {
     }
 }
 
+#[derive(Clone)]
 pub struct ConfigManager {
-    config: Config,
+    inner: Arc<ConfigManagerInner>,
+}
+
+struct ConfigManagerInner {
+    config: RwLock<Config>,
     config_path: PathBuf,
+    change_tx: watch::Sender<Config>,
+    watcher_active: AtomicBool,
 }
 
 impl ConfigManager {
@@ -120,81 +134,128 @@ impl ConfigManager {
 
         fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
-        let config_path = config_dir.join("config.json");
+        let jsonc_path = config_dir.join("config.jsonc");
+        let legacy_path = config_dir.join("config.json");
 
-        let config = if config_path.exists() {
-            let content = fs::read_to_string(&config_path).context("Failed to read config file")?;
-            serde_json::from_str(&content).context("Failed to parse config file")?
+        let (config_path, config) = if jsonc_path.exists() {
+            let config = Self::read_config_from_disk(&jsonc_path)?;
+            (jsonc_path, config)
+        } else if legacy_path.exists() {
+            let config = Self::read_config_from_disk(&legacy_path)?;
+            Self::write_config_file(&jsonc_path, &config)?;
+            tracing::info!(
+                "Migrated legacy config to JSONC: {:?} -> {:?}",
+                legacy_path,
+                jsonc_path
+            );
+            (jsonc_path, config)
         } else {
             let default_config = Config::default();
-            // Save default config
-            let json = serde_json::to_string_pretty(&default_config)
-                .context("Failed to serialize default config")?;
-            fs::write(&config_path, json).context("Failed to write default config")?;
-            tracing::info!("Created default config at: {:?}", config_path);
-            default_config
+            Self::write_config_file(&jsonc_path, &default_config)?;
+            tracing::info!("Created default config at: {:?}", jsonc_path);
+            (jsonc_path, default_config)
         };
 
         tracing::info!("Loaded config from: {:?}", config_path);
 
+        let (change_tx, _) = watch::channel(config.clone());
+
         Ok(Self {
-            config,
-            config_path,
+            inner: Arc::new(ConfigManagerInner {
+                config: RwLock::new(config),
+                config_path,
+                change_tx,
+                watcher_active: AtomicBool::new(false),
+            }),
         })
     }
 
-    pub fn get(&self) -> &Config {
-        &self.config
+    pub fn start_watching(&self) {
+        if self.inner.watcher_active.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        let inner = Arc::clone(&self.inner);
+
+        tokio::spawn(async move {
+            let mut last_state = Self::file_state(&inner.config_path);
+            let mut ticker = time::interval(Duration::from_millis(500));
+
+            loop {
+                ticker.tick().await;
+
+                let current_state = Self::file_state(&inner.config_path);
+                if current_state == last_state {
+                    continue;
+                }
+
+                last_state = current_state;
+
+                match Self::read_config_from_disk(&inner.config_path) {
+                    Ok(new_config) => {
+                        let mut guard = inner.config.write().expect("config lock poisoned");
+                        if *guard != new_config {
+                            let old_config = guard.clone();
+                            *guard = new_config.clone();
+                            drop(guard);
+
+                            if inner.change_tx.send(new_config.clone()).is_ok() {
+                                tracing::info!("Reloaded config from: {:?}", inner.config_path);
+                                tracing::debug!(
+                                    ?old_config,
+                                    ?new_config,
+                                    "Config watcher applied update"
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("Failed to reload config: {err}");
+                    }
+                }
+            }
+        });
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<Config> {
+        self.inner.change_tx.subscribe()
+    }
+
+    pub fn get(&self) -> Config {
+        self.inner
+            .config
+            .read()
+            .expect("config lock poisoned")
+            .clone()
     }
 
     pub fn save(&self) -> Result<()> {
-        let json =
-            serde_json::to_string_pretty(&self.config).context("Failed to serialize config")?;
-        fs::write(&self.config_path, json).context("Failed to write config file")?;
-        tracing::info!("Saved config to: {:?}", self.config_path);
+        let config = self.get();
+        Self::write_config_file(&self.inner.config_path, &config)?;
+
+        {
+            let mut guard = self.inner.config.write().expect("config lock poisoned");
+            *guard = config.clone();
+        }
+
+        let _ = self.inner.change_tx.send(config);
+
+        tracing::info!("Saved config to: {:?}", self.inner.config_path);
         Ok(())
     }
 
     pub fn get_model_path(&self) -> PathBuf {
-        // Try system models first, then fall back to local
-        let system_models = PathBuf::from("/usr/share/whisper/models");
-
-        let models_dir = if system_models.exists() {
-            system_models
-        } else {
-            // Fall back to shared Python version's models
-            let home = std::env::var("HOME").expect("HOME not set");
-            PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp/models")
-        };
-
-        // Handle model naming conventions
-        let model_name = &self.config.model;
-        let model_filename = if model_name.ends_with(".en") {
-            format!("ggml-{}.bin", model_name)
-        } else {
-            // Try .en.bin first, then .bin
-            let en_path = models_dir.join(format!("ggml-{}.en.bin", model_name));
-            if en_path.exists() {
-                return en_path;
-            }
-            format!("ggml-{}.bin", model_name)
-        };
-
-        models_dir.join(model_filename)
+        let config = self.get();
+        Self::resolve_model_path(&config)
     }
 
     pub fn get_whisper_binary_path(&self) -> PathBuf {
-        // Priority order:
-        // 1. System-wide installation (AUR package)
-        // 2. User's local build
-
         let system_binary = PathBuf::from("/usr/bin/whisper-cli");
         if system_binary.exists() {
             return system_binary;
         }
 
-        // Fall back to local build
-        let home = std::env::var("HOME").expect("HOME not set");
+        let home = env::var("HOME").expect("HOME not set");
         let local_dir = PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp");
 
         let candidates = vec![
@@ -209,7 +270,6 @@ impl ConfigManager {
             }
         }
 
-        // Return system path as default
         system_binary
     }
 
@@ -225,13 +285,58 @@ impl ConfigManager {
     }
 
     pub fn get_assets_dir(&self) -> PathBuf {
-        // Try installation directory first
         let install_path = PathBuf::from("/usr/lib/hyprwhspr-rs/share/assets");
         if install_path.exists() {
             return install_path;
         }
 
-        // Fallback to relative path for development
         PathBuf::from("assets")
+    }
+
+    fn read_config_from_disk(path: &Path) -> Result<Config> {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file at {:?}", path))?;
+        Self::parse_config(&content)
+    }
+
+    fn write_config_file(path: &Path, config: &Config) -> Result<()> {
+        let json = serde_json::to_string_pretty(config).context("Failed to serialize config")?;
+        fs::write(path, json).with_context(|| format!("Failed to write config file at {:?}", path))
+    }
+
+    fn parse_config(content: &str) -> Result<Config> {
+        let value = parse_to_serde_value(content, &ParseOptions::default())
+            .context("Failed to parse config as JSONC")?
+            .ok_or_else(|| anyhow!("Config file did not contain a JSON value"))?;
+        serde_json::from_value(value).context("Failed to deserialize config")
+    }
+
+    fn file_state(path: &Path) -> Option<(SystemTime, u64)> {
+        let metadata = fs::metadata(path).ok()?;
+        let modified = metadata.modified().ok()?;
+        Some((modified, metadata.len()))
+    }
+
+    fn resolve_model_path(config: &Config) -> PathBuf {
+        let system_models = PathBuf::from("/usr/share/whisper/models");
+
+        let models_dir = if system_models.exists() {
+            system_models
+        } else {
+            let home = env::var("HOME").expect("HOME not set");
+            PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp/models")
+        };
+
+        let model_name = &config.model;
+        if model_name.ends_with(".en") {
+            return models_dir.join(format!("ggml-{}.bin", model_name));
+        }
+
+        let en_path = models_dir.join(format!("ggml-{}.en.bin", model_name));
+        if en_path.exists() {
+            return en_path;
+        }
+
+        models_dir.join(format!("ggml-{}.bin", model_name))
     }
 }

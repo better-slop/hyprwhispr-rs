@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, SampleRate, StreamConfig};
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 pub struct AudioCapture {

@@ -1,13 +1,67 @@
 use anyhow::{Context, Result};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread::{self, JoinHandle};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
 
 use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
-use crate::config::ConfigManager;
+use crate::config::{Config, ConfigManager};
 use crate::input::{GlobalShortcuts, ShortcutEvent, TextInjector};
 use crate::status::StatusWriter;
 use crate::whisper::WhisperManager;
+
+struct ShortcutListener {
+    stop_flag: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl ShortcutListener {
+    fn spawn(shortcut: String, tx: mpsc::Sender<ShortcutEvent>) -> Result<Self> {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let runner_flag = Arc::clone(&stop_flag);
+        let runner_tx = tx.clone();
+
+        let handle = thread::spawn(move || match GlobalShortcuts::new(&shortcut) {
+            Ok(shortcuts) => {
+                if let Err(e) = shortcuts.run(runner_tx, runner_flag) {
+                    error!("Global shortcuts error: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Failed to initialize global shortcuts: {}", e);
+            }
+        });
+
+        Ok(Self {
+            stop_flag,
+            handle: Some(handle),
+        })
+    }
+
+    fn restart(&mut self, shortcut: String, tx: mpsc::Sender<ShortcutEvent>) -> Result<()> {
+        self.stop();
+        *self = Self::spawn(shortcut, tx)?;
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            if let Err(err) = handle.join() {
+                error!("Shortcut listener thread panicked: {:?}", err);
+            }
+        }
+    }
+}
+
+impl Drop for ShortcutListener {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
 
 pub struct HyprwhsprApp {
     config_manager: ConfigManager,
@@ -16,8 +70,10 @@ pub struct HyprwhsprApp {
     whisper_manager: WhisperManager,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
-
-    // State
+    shortcut_tx: mpsc::Sender<ShortcutEvent>,
+    shortcut_rx: Option<mpsc::Receiver<ShortcutEvent>>,
+    shortcut_listener: Option<ShortcutListener>,
+    current_config: Config,
     recording_session: Option<RecordingSession>,
     is_processing: bool,
 }
@@ -26,10 +82,8 @@ impl HyprwhsprApp {
     pub fn new(config_manager: ConfigManager) -> Result<Self> {
         let config = config_manager.get();
 
-        // Initialize audio capture
         let audio_capture = AudioCapture::new().context("Failed to initialize audio capture")?;
 
-        // Initialize audio feedback
         let assets_dir = config_manager.get_assets_dir();
         let audio_feedback = AudioFeedback::new(
             config.audio_feedback,
@@ -40,7 +94,6 @@ impl HyprwhsprApp {
             config.stop_sound_volume,
         );
 
-        // Initialize whisper manager
         let whisper_manager = WhisperManager::new(
             config_manager.get_model_path(),
             config_manager.get_whisper_binary_path(),
@@ -54,16 +107,16 @@ impl HyprwhsprApp {
             .initialize()
             .context("Failed to initialize Whisper")?;
 
-        // Initialize text injector
         let text_injector = TextInjector::new(
             config.shift_paste,
             config.word_overrides.clone(),
             config.auto_copy_clipboard,
         )?;
 
-        // Initialize status writer
         let status_writer = StatusWriter::new()?;
         status_writer.set_recording(false)?;
+
+        let (shortcut_tx, shortcut_rx) = mpsc::channel(10);
 
         Ok(Self {
             config_manager,
@@ -72,6 +125,10 @@ impl HyprwhsprApp {
             whisper_manager,
             text_injector: Arc::new(Mutex::new(text_injector)),
             status_writer,
+            shortcut_tx,
+            shortcut_rx: Some(shortcut_rx),
+            shortcut_listener: None,
+            current_config: config,
             recording_session: None,
             is_processing: false,
         })
@@ -80,34 +137,122 @@ impl HyprwhsprApp {
     pub async fn run(mut self) -> Result<()> {
         info!("🚀 hyprwhspr running!");
 
-        // Set up channels
-        let (shortcut_tx, mut shortcut_rx) = mpsc::channel(10);
+        let mut shortcut_rx = self
+            .shortcut_rx
+            .take()
+            .expect("shortcut receiver already consumed");
+        self.ensure_shortcut_listener(self.current_config.primary_shortcut.clone())?;
 
-        // Spawn global shortcuts listener in separate thread
-        let config = self.config_manager.get();
-        let shortcut = config.primary_shortcut.clone();
+        let mut config_rx = self.config_manager.subscribe();
 
-        std::thread::spawn(move || match GlobalShortcuts::new(&shortcut) {
-            Ok(shortcuts) => {
-                if let Err(e) = shortcuts.run(shortcut_tx) {
-                    error!("Global shortcuts error: {}", e);
-                }
-            }
-            Err(e) => {
-                error!("Failed to initialize global shortcuts: {}", e);
-            }
-        });
-
-        // Main event loop
         loop {
             tokio::select! {
-                Some(event) = shortcut_rx.recv() => {
-                    if let Err(e) = self.handle_shortcut(event).await {
-                        error!("Error handling shortcut: {}", e);
+                event = shortcut_rx.recv() => {
+                    match event {
+                        Some(event) => {
+                            if let Err(e) = self.handle_shortcut(event).await {
+                                error!("Error handling shortcut: {}", e);
+                            }
+                        }
+                        None => {
+                            info!("Shortcut channel closed");
+                            break;
+                        }
+                    }
+                }
+                result = config_rx.changed() => {
+                    match result {
+                        Ok(()) => {
+                            let updated = config_rx.borrow().clone();
+                            if let Err(err) = self.apply_config_update(updated) {
+                                error!("Failed to apply config update: {}", err);
+                            }
+                        }
+                        Err(_) => {
+                            info!("Configuration watcher closed");
+                            break;
+                        }
                     }
                 }
             }
         }
+
+        Ok(())
+    }
+
+    fn ensure_shortcut_listener(&mut self, shortcut: String) -> Result<()> {
+        if let Some(listener) = &mut self.shortcut_listener {
+            listener.restart(shortcut, self.shortcut_tx.clone())
+        } else {
+            let listener = ShortcutListener::spawn(shortcut, self.shortcut_tx.clone())?;
+            self.shortcut_listener = Some(listener);
+            Ok(())
+        }
+    }
+
+    fn apply_config_update(&mut self, new_config: Config) -> Result<()> {
+        tracing::debug!(?new_config, "Apply config update requested");
+        if new_config == self.current_config {
+            tracing::debug!("Config unchanged; ignoring update");
+            return Ok(());
+        }
+
+        if self.recording_session.is_some() || self.is_processing {
+            warn!("Skipping config refresh while busy");
+            return Ok(());
+        }
+
+        let assets_dir = self.config_manager.get_assets_dir();
+        let audio_feedback = AudioFeedback::new(
+            new_config.audio_feedback,
+            assets_dir,
+            new_config.start_sound_path.clone(),
+            new_config.stop_sound_path.clone(),
+            new_config.start_sound_volume,
+            new_config.stop_sound_volume,
+        );
+
+        let text_injector = TextInjector::new(
+            new_config.shift_paste,
+            new_config.word_overrides.clone(),
+            new_config.auto_copy_clipboard,
+        )?;
+
+        let whisper_changed = self.current_config.model != new_config.model
+            || self.current_config.whisper_prompt != new_config.whisper_prompt
+            || self.current_config.threads != new_config.threads
+            || self.current_config.gpu_layers != new_config.gpu_layers;
+
+        if whisper_changed {
+            let manager = WhisperManager::new(
+                self.config_manager.get_model_path(),
+                self.config_manager.get_whisper_binary_path(),
+                new_config.threads,
+                new_config.whisper_prompt.clone(),
+                self.config_manager.get_temp_dir(),
+                new_config.gpu_layers,
+            )?;
+            manager.initialize()?;
+            self.whisper_manager = manager;
+        }
+
+        if new_config.primary_shortcut != self.current_config.primary_shortcut
+            || self.shortcut_listener.is_none()
+        {
+            self.ensure_shortcut_listener(new_config.primary_shortcut.clone())?;
+            info!(
+                "Primary shortcut updated to {}",
+                new_config.primary_shortcut
+            );
+        }
+
+        self.text_injector = Arc::new(Mutex::new(text_injector));
+        self.audio_feedback = audio_feedback;
+        self.current_config = new_config;
+
+        info!("Configuration updated");
+        tracing::debug!(?self.current_config, "Config state after update");
+        Ok(())
     }
 
     async fn handle_shortcut(&mut self, _event: ShortcutEvent) -> Result<()> {
@@ -117,10 +262,8 @@ impl HyprwhsprApp {
         }
 
         if self.recording_session.is_some() {
-            // Stop recording
             self.stop_recording().await?;
         } else {
-            // Start recording
             self.start_recording().await?;
         }
 
@@ -130,10 +273,8 @@ impl HyprwhsprApp {
     async fn start_recording(&mut self) -> Result<()> {
         info!("🎤 Starting recording...");
 
-        // Play start sound
         self.audio_feedback.play_start_sound()?;
 
-        // Start audio capture
         let session = self
             .audio_capture
             .start_recording()
@@ -141,7 +282,6 @@ impl HyprwhsprApp {
 
         self.recording_session = Some(session);
 
-        // Update status
         self.status_writer.set_recording(true)?;
 
         Ok(())
@@ -150,22 +290,17 @@ impl HyprwhsprApp {
     async fn stop_recording(&mut self) -> Result<()> {
         info!("🛑 Stopping recording...");
 
-        // Take ownership of the recording session
         let session = self
             .recording_session
             .take()
             .context("No active recording session")?;
 
-        // Play stop sound
         self.audio_feedback.play_stop_sound()?;
 
-        // Update status
         self.status_writer.set_recording(false)?;
 
-        // Stop recording and get audio data
         let audio_data = session.stop().context("Failed to stop recording")?;
 
-        // Process the audio
         if !audio_data.is_empty() {
             self.is_processing = true;
             if let Err(e) = self.process_audio(audio_data).await {
@@ -180,7 +315,6 @@ impl HyprwhsprApp {
     }
 
     async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
-        // Transcribe audio
         let transcription = self.whisper_manager.transcribe(audio_data).await?;
 
         if transcription.trim().is_empty() {
@@ -188,7 +322,6 @@ impl HyprwhsprApp {
             return Ok(());
         }
 
-        // Inject text
         let text_injector = Arc::clone(&self.text_injector);
         let mut injector = text_injector.lock().await;
         injector.inject_text(&transcription).await?;
@@ -199,14 +332,15 @@ impl HyprwhsprApp {
     pub async fn cleanup(&mut self) -> Result<()> {
         info!("🧹 Cleaning up...");
 
-        // Stop recording if active
         if self.recording_session.is_some() {
             self.status_writer.set_recording(false)?;
             self.recording_session = None;
         }
 
-        // Don't save config on exit - only save when explicitly modified
-        // self.config_manager.save()?;
+        if let Some(listener) = &mut self.shortcut_listener {
+            listener.stop();
+            self.shortcut_listener = None;
+        }
 
         info!("✅ Cleanup completed");
         Ok(())

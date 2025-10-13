@@ -29,6 +29,7 @@ async fn main() -> Result<()> {
 
     // Load configuration
     let config_manager = ConfigManager::load()?;
+    config_manager.start_watching();
     let config = config_manager.get();
     info!("✅ Configuration loaded");
     info!("   Model: {}", config.model);
@@ -98,6 +99,8 @@ async fn run_test_mode() -> Result<()> {
 
     // Load configuration
     let config_manager = ConfigManager::load()?;
+    config_manager.start_watching();
+    let mut config_rx = config_manager.subscribe();
     let config = config_manager.get();
     info!("✅ Configuration loaded");
     info!("   Model: {}", config.model);
@@ -141,6 +144,20 @@ async fn run_test_mode() -> Result<()> {
                     Ok(None) => break,
                     Err(e) => {
                         info!("Error reading input: {}", e);
+                        break;
+                    }
+                }
+            }
+            result = config_rx.changed() => {
+                match result {
+                    Ok(()) => {
+                        let updated = config_rx.borrow().clone();
+                        if let Err(err) = app.apply_config_update(updated) {
+                            info!("Failed to apply config update: {}", err);
+                        }
+                    }
+                    Err(_) => {
+                        info!("Configuration watcher closed");
                         break;
                     }
                 }

@@ -1,7 +1,11 @@
 use anyhow::{Context, Result};
-use evdev::{Device, EventType, InputEventKind, Key};
+use evdev::{Device, InputEventKind, Key};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -40,7 +44,7 @@ impl GlobalShortcuts {
         })
     }
 
-    pub fn run(mut self, tx: mpsc::Sender<ShortcutEvent>) -> Result<()> {
+    pub fn run(mut self, tx: mpsc::Sender<ShortcutEvent>, stop: Arc<AtomicBool>) -> Result<()> {
         let mut pressed_keys: HashSet<Key> = HashSet::new();
         let mut last_trigger = Instant::now() - Duration::from_secs(10);
         let debounce_duration = Duration::from_millis(500);
@@ -48,6 +52,10 @@ impl GlobalShortcuts {
         info!("🎯 Listening for shortcut: {}", self.shortcut_name);
 
         loop {
+            if stop.load(Ordering::Relaxed) {
+                info!("Stopping shortcut listener: {}", self.shortcut_name);
+                break;
+            }
             // Check each device
             let target_keys = &self.target_keys;
             let shortcut_name = &self.shortcut_name;
@@ -118,6 +126,8 @@ impl GlobalShortcuts {
             // Small sleep to prevent busy-waiting
             std::thread::sleep(Duration::from_millis(10));
         }
+
+        Ok(())
     }
 
     fn is_target_combination(&self, pressed: &HashSet<Key>) -> bool {
