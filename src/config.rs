@@ -85,6 +85,9 @@ pub struct Config {
 
     #[serde(default = "default_no_speech_threshold")]
     pub no_speech_threshold: f32,
+
+    #[serde(default)]
+    pub models_dirs: Vec<String>,
 }
 
 fn default_gpu_layers() -> i32 {
@@ -200,6 +203,7 @@ impl Default for Config {
             gpu_layers: default_gpu_layers(),
             vad: VadConfig::default(),
             no_speech_threshold: default_no_speech_threshold(),
+            models_dirs: Vec::new(),
         };
         config.normalize_shortcuts();
         config
@@ -472,7 +476,7 @@ impl ConfigManager {
     }
 
     fn resolve_model_path(config: &Config) -> PathBuf {
-        let models_dir = Self::model_search_dirs()
+        let models_dir = Self::model_search_dirs(config)
             .into_iter()
             .next()
             .unwrap_or_else(|| PathBuf::from("."));
@@ -522,7 +526,7 @@ impl ConfigManager {
             }
         }
 
-        for dir in Self::model_search_dirs() {
+        for dir in Self::model_search_dirs(config) {
             let candidate = dir.join(model_ref);
             if candidate.exists() {
                 return Some(candidate);
@@ -532,15 +536,38 @@ impl ConfigManager {
         None
     }
 
-    fn model_search_dirs() -> Vec<PathBuf> {
+    fn model_search_dirs(config: &Config) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
+
+        // Add custom models directories from config (with path expansion)
+        for dir_str in &config.models_dirs {
+            let expanded = if dir_str.starts_with("~/") {
+                if let Ok(home) = env::var("HOME") {
+                    PathBuf::from(home).join(&dir_str[2..])
+                } else {
+                    PathBuf::from(dir_str)
+                }
+            } else {
+                PathBuf::from(dir_str)
+            };
+
+            if expanded.exists() {
+                dirs.push(expanded);
+            }
+        }
+
+        // Add system default paths as fallback
         let system_models = PathBuf::from("/usr/share/whisper/models");
         if system_models.exists() {
             dirs.push(system_models);
         }
         if let Ok(home) = env::var("HOME") {
-            dirs.push(PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp/models"));
+            let legacy_path = PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp/models");
+            if legacy_path.exists() {
+                dirs.push(legacy_path);
+            }
         }
+
         dirs
     }
 }
