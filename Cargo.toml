@@ -28,6 +28,7 @@ rodio = "0.17"
 evdev = "0.12"
 arboard = { version = "3", features = ["wayland-data-control"] }
 enigo = "0.2"
+libc = "0.2"
 
 # Whisper (we'll try whisper-rs, but have subprocess fallback)
 whisper-rs = { version = "0.12", optional = true }

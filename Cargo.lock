@@ -791,6 +791,7 @@ dependencies = [
  "evdev",
  "futures",
  "jsonc-parser",
+ "libc",
  "owo-colors",
  "regex",
  "rodio",

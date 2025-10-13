@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use evdev::{Device, InputEventKind, Key};
 use std::collections::HashSet;
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -81,20 +82,26 @@ impl GlobalShortcuts {
             listen_label, self.shortcut_name
         );
 
-        loop {
+        'outer: loop {
             if stop.load(Ordering::Relaxed) {
                 info!("Stopping shortcut listener: {}", self.shortcut_name);
-                break;
+                break 'outer;
             }
             // Check each device
             let target_keys = &self.target_keys;
             let shortcut_name = &self.shortcut_name;
 
             for device in &mut self.devices {
+                if stop.load(Ordering::Relaxed) {
+                    break 'outer;
+                }
                 // Fetch events from this device
                 match device.fetch_events() {
                     Ok(events) => {
                         for event in events {
+                            if stop.load(Ordering::Relaxed) {
+                                break 'outer;
+                            }
                             match event.kind() {
                                 InputEventKind::Key(key) => {
                                     let value = event.value();
@@ -177,6 +184,9 @@ impl GlobalShortcuts {
                     Err(e) => {
                         if e.kind() != std::io::ErrorKind::WouldBlock {
                             error!("Error fetching events: {}", e);
+                        }
+                        if stop.load(Ordering::Relaxed) {
+                            break 'outer;
                         }
                     }
                 }
@@ -302,6 +312,9 @@ impl GlobalShortcuts {
                     && keys.contains(Key::KEY_S)
                     && keys.contains(Key::KEY_D)
                 {
+                    if let Err(err) = set_device_nonblocking(&device) {
+                        warn!("Failed to set non-blocking mode for {:?}: {}", path, err);
+                    }
                     let name = device.name().unwrap_or("Unknown");
                     info!("Found keyboard device: {} at {:?}", name, path);
                     keyboards.push(device);
@@ -332,4 +345,30 @@ impl GlobalShortcuts {
 
         Ok(keyboards)
     }
+}
+
+fn set_device_nonblocking(device: &Device) -> Result<()> {
+    let fd = device.as_raw_fd();
+
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(anyhow::anyhow!(
+            "fcntl(F_GETFL) failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    if (flags & libc::O_NONBLOCK) != 0 {
+        return Ok(());
+    }
+
+    let result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    if result < 0 {
+        return Err(anyhow::anyhow!(
+            "fcntl(F_SETFL) failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    Ok(())
 }
