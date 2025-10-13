@@ -1,8 +1,4 @@
 <div align="center">
-  <img src="assets/frame.png" alt="hyprwhspr-rs logo frame header" />
-</div>
-
-<div align="center">
   <img src="assets/logo.png" alt="hyprwhspr-rs logo" width="200" />
   <h3>hyprwhspr-rs</h3>
   <p>Rust implementation of <a href="https://github.com/goodroot/hyprwhspr">hyprwhspr</a> | Native speech-to-text voice dictation for Hyprland.</p>
