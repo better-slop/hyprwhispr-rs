@@ -377,9 +377,18 @@ fn apply_speech_replacement_entry(buffer: &mut String, entry: &SpeechReplacement
 fn capitalize_after_period(input: &str) -> (String, usize) {
     let mut result = String::with_capacity(input.len());
     let mut capitalize_next = true;
+    let mut awaiting_space_after_punct = false;
     let mut count = 0;
 
     for ch in input.chars() {
+        if awaiting_space_after_punct {
+            if ch == ' ' {
+                capitalize_next = true;
+            } else if !ch.is_whitespace() {
+                awaiting_space_after_punct = false;
+            }
+        }
+
         let mut output_char = ch;
 
         if capitalize_next {
@@ -387,18 +396,27 @@ fn capitalize_after_period(input: &str) -> (String, usize) {
                 output_char = ch.to_ascii_uppercase();
                 count += 1;
                 capitalize_next = false;
+                awaiting_space_after_punct = false;
             } else if ch.is_ascii_uppercase() || ch.is_ascii_digit() {
                 capitalize_next = false;
+                awaiting_space_after_punct = false;
             } else if !ch.is_whitespace() {
                 capitalize_next = false;
+                awaiting_space_after_punct = false;
             }
         }
 
         result.push(output_char);
 
         match ch {
-            '.' | '!' | '?' => capitalize_next = true,
-            '\n' => capitalize_next = true,
+            '.' | '!' | '?' => {
+                capitalize_next = false;
+                awaiting_space_after_punct = true;
+            }
+            '\n' => {
+                capitalize_next = true;
+                awaiting_space_after_punct = false;
+            }
             _ => {}
         }
     }
