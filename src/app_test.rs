@@ -7,7 +7,7 @@ use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
 use crate::config::{Config, ConfigManager};
 use crate::input::TextInjector;
 use crate::status::StatusWriter;
-use crate::whisper::WhisperManager;
+use crate::whisper::{WhisperManager, WhisperVadOptions};
 
 /// Test version of the app that doesn't use global shortcuts
 pub struct HyprwhsprAppTest {
@@ -38,6 +38,8 @@ impl HyprwhsprAppTest {
             config.stop_sound_volume,
         );
 
+        let vad_options = build_vad_options(&config_manager, &config);
+
         let whisper_manager = WhisperManager::new(
             config_manager.get_model_path(),
             config_manager.get_whisper_binary_path(),
@@ -45,6 +47,8 @@ impl HyprwhsprAppTest {
             config.whisper_prompt.clone(),
             config_manager.get_temp_dir(),
             config.gpu_layers,
+            vad_options,
+            config.no_speech_threshold,
         )?;
 
         whisper_manager
@@ -104,9 +108,13 @@ impl HyprwhsprAppTest {
         let whisper_changed = self.current_config.model != new_config.model
             || self.current_config.whisper_prompt != new_config.whisper_prompt
             || self.current_config.threads != new_config.threads
-            || self.current_config.gpu_layers != new_config.gpu_layers;
+            || self.current_config.gpu_layers != new_config.gpu_layers
+            || self.current_config.vad != new_config.vad
+            || (self.current_config.no_speech_threshold - new_config.no_speech_threshold).abs()
+                > f32::EPSILON;
 
         if whisper_changed {
+            let vad_options = build_vad_options(&self.config_manager, &new_config);
             let manager = WhisperManager::new(
                 self.config_manager.get_model_path(),
                 self.config_manager.get_whisper_binary_path(),
@@ -114,6 +122,8 @@ impl HyprwhsprAppTest {
                 new_config.whisper_prompt.clone(),
                 self.config_manager.get_temp_dir(),
                 new_config.gpu_layers,
+                vad_options,
+                new_config.no_speech_threshold,
             )?;
             manager.initialize()?;
             self.whisper_manager = manager;
@@ -222,5 +232,18 @@ impl HyprwhsprAppTest {
 
         info!("✅ Cleanup completed");
         Ok(())
+    }
+}
+
+fn build_vad_options(config_manager: &ConfigManager, config: &Config) -> WhisperVadOptions {
+    WhisperVadOptions {
+        enabled: config.vad.enabled,
+        model_path: config_manager.get_vad_model_path(config),
+        threshold: config.vad.threshold,
+        min_speech_ms: config.vad.min_speech_ms,
+        min_silence_ms: config.vad.min_silence_ms,
+        max_speech_s: config.vad.max_speech_s,
+        speech_pad_ms: config.vad.speech_pad_ms,
+        samples_overlap: config.vad.samples_overlap,
     }
 }

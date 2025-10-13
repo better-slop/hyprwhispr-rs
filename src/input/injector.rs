@@ -39,6 +39,310 @@ static SPACE_BEFORE_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static DUPLICATE_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r",(?:\s*,)+").expect("valid duplicate comma cleanup regex"));
 
+#[derive(Clone, Copy)]
+struct SpeechReplacement {
+    phrase: &'static str,
+    replacement: &'static str,
+    adjust_preceding_punct: bool,
+}
+
+static SPEECH_REPLACEMENTS: &[SpeechReplacement] = &[
+    SpeechReplacement {
+        phrase: "period",
+        replacement: ".",
+        adjust_preceding_punct: true,
+    },
+    SpeechReplacement {
+        phrase: "comma",
+        replacement: ",",
+        adjust_preceding_punct: true,
+    },
+    SpeechReplacement {
+        phrase: "question mark",
+        replacement: "?",
+        adjust_preceding_punct: true,
+    },
+    SpeechReplacement {
+        phrase: "exclamation mark",
+        replacement: "!",
+        adjust_preceding_punct: true,
+    },
+    SpeechReplacement {
+        phrase: "exclamation point",
+        replacement: "!",
+        adjust_preceding_punct: true,
+    },
+    SpeechReplacement {
+        phrase: "colon",
+        replacement: ":",
+        adjust_preceding_punct: true,
+    },
+    SpeechReplacement {
+        phrase: "semicolon",
+        replacement: ";",
+        adjust_preceding_punct: true,
+    },
+    SpeechReplacement {
+        phrase: "new line",
+        replacement: "\n",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "tab",
+        replacement: "\t",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "dash",
+        replacement: "-",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "dash dash",
+        replacement: "--",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "hyphen",
+        replacement: "-",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "underscore",
+        replacement: "_",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "open paren",
+        replacement: "(",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "open parenthesis",
+        replacement: "(",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "open parentheses",
+        replacement: "(",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "close paren",
+        replacement: ")",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "close parenthesis",
+        replacement: ")",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "close parentheses",
+        replacement: ")",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "open bracket",
+        replacement: "[",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "close bracket",
+        replacement: "]",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "open brace",
+        replacement: "{",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "close brace",
+        replacement: "}",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "at symbol",
+        replacement: "@",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "hash",
+        replacement: "#",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "dollar sign",
+        replacement: "$",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "percent",
+        replacement: "%",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "caret",
+        replacement: "^",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "ampersand",
+        replacement: "&",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "asterisk",
+        replacement: "*",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "plus",
+        replacement: "+",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "equals",
+        replacement: "=",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "less than",
+        replacement: "<",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "greater than",
+        replacement: ">",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "slash",
+        replacement: "/",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "backslash",
+        replacement: "\\",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "pipe",
+        replacement: "|",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "tilde",
+        replacement: "~",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "grave",
+        replacement: "`",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "quote",
+        replacement: "\"",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "double quote",
+        replacement: "\"",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "apostrophe",
+        replacement: "'",
+        adjust_preceding_punct: false,
+    },
+    SpeechReplacement {
+        phrase: "single quote",
+        replacement: "'",
+        adjust_preceding_punct: false,
+    },
+];
+
+static SPEECH_REPLACEMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    let alternates = SPEECH_REPLACEMENTS
+        .iter()
+        .map(|entry| regex::escape(entry.phrase))
+        .collect::<Vec<_>>()
+        .join("|");
+    let pattern = format!(r"(?i)\b(?P<command>{})\b[.!?,;:]*", alternates);
+    Regex::new(&pattern).expect("valid speech replacement regex")
+});
+
+static SPEECH_REPLACEMENT_LOOKUP: LazyLock<HashMap<&'static str, &'static SpeechReplacement>> =
+    LazyLock::new(|| {
+        let mut map = HashMap::new();
+        for entry in SPEECH_REPLACEMENTS {
+            map.insert(entry.phrase, entry);
+        }
+        map
+    });
+
+fn apply_speech_replacements(text: &str) -> (String, usize) {
+    let mut result = String::with_capacity(text.len());
+    let mut last_end = 0;
+    let mut count = 0;
+
+    for caps in SPEECH_REPLACEMENT_REGEX.captures_iter(text) {
+        let matched = caps.get(0).expect("regex match");
+        result.push_str(&text[last_end..matched.start()]);
+
+        if let Some(command) = caps.name("command") {
+            let key = command.as_str().to_ascii_lowercase();
+            if let Some(entry) = SPEECH_REPLACEMENT_LOOKUP.get(key.as_str()) {
+                apply_speech_replacement_entry(&mut result, entry);
+                count += 1;
+            }
+        }
+
+        last_end = matched.end();
+    }
+
+    result.push_str(&text[last_end..]);
+    (result, count)
+}
+
+fn apply_speech_replacement_entry(buffer: &mut String, entry: &SpeechReplacement) {
+    if entry.adjust_preceding_punct {
+        let mut trailing_ws: Vec<char> = Vec::new();
+
+        loop {
+            if buffer.ends_with(' ') {
+                buffer.pop();
+                trailing_ws.push(' ');
+            } else if buffer.ends_with('\t') {
+                buffer.pop();
+                trailing_ws.push('\t');
+            } else {
+                break;
+            }
+        }
+
+        loop {
+            let Some(ch) = buffer.chars().last() else {
+                break;
+            };
+            if matches!(ch, '.' | ',' | '!' | '?' | ';' | ':') {
+                buffer.pop();
+            } else {
+                break;
+            }
+        }
+
+        buffer.push_str(entry.replacement);
+        for ch in trailing_ws.into_iter().rev() {
+            buffer.push(ch);
+        }
+    } else {
+        buffer.push_str(entry.replacement);
+    }
+}
+
 pub struct TextInjector {
     enigo: Enigo,
     clipboard: Clipboard,
@@ -213,66 +517,7 @@ impl TextInjector {
 
     fn apply_speech_replacements_with_count(&self, text: &str) -> (String, usize) {
         // Built-in speech-to-text replacements
-        let replacements = [
-            (r"\bperiod\b", "."),
-            (r"\bcomma\b", ","),
-            (r"\bquestion mark\b", "?"),
-            (r"\bexclamation mark\b", "!"),
-            (r"\bexclamation point\b", "!"),
-            (r"\bcolon\b", ":"),
-            (r"\bsemicolon\b", ";"),
-            (r"\bnew line\b", "\n"),
-            (r"\btab\b", "\t"),
-            (r"\bdash\b", "-"),
-            (r"\bdash dash\b", "--"),
-            (r"\bhyphen\b", "-"),
-            (r"\bunderscore\b", "_"),
-            (r"\bopen paren\b", "("),
-            (r"\bopen parenthesis\b", "("),
-            (r"\bopen parentheses\b", "("),
-            (r"\bclose paren\b", ")"),
-            (r"\bclose parenthesis\b", ")"),
-            (r"\bclose parentheses\b", ")"),
-            (r"\bopen bracket\b", "["),
-            (r"\bclose bracket\b", "]"),
-            (r"\bopen brace\b", "{"),
-            (r"\bclose brace\b", "}"),
-            (r"\bat symbol\b", "@"),
-            (r"\bhash\b", "#"),
-            (r"\bdollar sign\b", "$"),
-            (r"\bpercent\b", "%"),
-            (r"\bcaret\b", "^"),
-            (r"\bampersand\b", "&"),
-            (r"\basterisk\b", "*"),
-            (r"\bplus\b", "+"),
-            (r"\bequals\b", "="),
-            (r"\bless than\b", "<"),
-            (r"\bgreater than\b", ">"),
-            (r"\bslash\b", "/"),
-            (r"\bbackslash\b", r"\"),
-            (r"\bpipe\b", "|"),
-            (r"\btilde\b", "~"),
-            (r"\bgrave\b", "`"),
-            (r"\bquote\b", "\""),
-            (r"\bdouble quote\b", "\""),
-            (r"\bapostrophe\b", "'"),
-            (r"\bsingle quote\b", "'"),
-        ];
-
-        let mut result = text.to_string();
-        let mut count = 0;
-
-        for (pattern, replacement) in &replacements {
-            if let Ok(re) = Regex::new(&format!("(?i){}", pattern)) {
-                let before = result.clone();
-                result = re.replace_all(&result, *replacement).to_string();
-                if before != result {
-                    count += 1;
-                }
-            }
-        }
-
-        (result, count)
+        apply_speech_replacements(text)
     }
 }
 
@@ -377,5 +622,19 @@ mod tests {
             clean_control_artifacts(input),
             "{ fuck fuck fuck fuck, fuck }"
         );
+    }
+
+    #[test]
+    fn speech_replacements_normalize_commanded_punctuation() {
+        let input = "This is awesome. Period. I love this. Comma. Fuck. Yeah. Comma. Fuck. Period.";
+        let (after_speech, count) = apply_speech_replacements(input);
+        let cleaned = clean_control_artifacts(&after_speech);
+        let collapsed = collapse_spaces(&cleaned);
+
+        assert_eq!(
+            collapsed.trim(),
+            "This is awesome. I love this, Fuck. Yeah, Fuck."
+        );
+        assert_eq!(count, 4);
     }
 }

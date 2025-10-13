@@ -1,3 +1,3 @@
 pub mod manager;
 
-pub use manager::WhisperManager;
+pub use manager::{WhisperManager, WhisperVadOptions};

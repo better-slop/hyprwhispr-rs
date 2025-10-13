@@ -5,6 +5,37 @@ use std::path::PathBuf;
 use std::process::Command;
 use tracing::{debug, info, warn};
 
+#[derive(Debug, Clone)]
+pub struct WhisperVadOptions {
+    pub enabled: bool,
+    pub model_path: Option<PathBuf>,
+    pub threshold: f32,
+    pub min_speech_ms: u32,
+    pub min_silence_ms: u32,
+    pub max_speech_s: f32,
+    pub speech_pad_ms: u32,
+    pub samples_overlap: f32,
+}
+
+impl WhisperVadOptions {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            model_path: None,
+            threshold: 0.5,
+            min_speech_ms: 250,
+            min_silence_ms: 100,
+            max_speech_s: f32::INFINITY,
+            speech_pad_ms: 30,
+            samples_overlap: 0.10,
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.enabled && self.model_path.is_some()
+    }
+}
+
 pub struct WhisperManager {
     model_path: PathBuf,
     binary_path: PathBuf,
@@ -12,6 +43,8 @@ pub struct WhisperManager {
     whisper_prompt: String,
     temp_dir: PathBuf,
     gpu_layers: i32,
+    vad: WhisperVadOptions,
+    no_speech_threshold: f32,
 }
 
 impl WhisperManager {
@@ -22,6 +55,8 @@ impl WhisperManager {
         whisper_prompt: String,
         temp_dir: PathBuf,
         gpu_layers: i32,
+        vad: WhisperVadOptions,
+        no_speech_threshold: f32,
     ) -> Result<Self> {
         Ok(Self {
             model_path,
@@ -30,6 +65,8 @@ impl WhisperManager {
             whisper_prompt,
             temp_dir,
             gpu_layers,
+            vad,
+            no_speech_threshold,
         })
     }
 
@@ -59,6 +96,16 @@ impl WhisperManager {
             info!("   GPU: enabled (AUR version uses GPU by default)");
         } else {
             info!("   GPU: disabled (CPU only)");
+        }
+
+        if self.vad.enabled {
+            if let Some(path) = &self.vad.model_path {
+                info!("   VAD: enabled ({})", path.display());
+            } else {
+                warn!("   VAD: enabled but model file not found (will run without VAD)");
+            }
+        } else {
+            info!("   VAD: disabled");
         }
 
         Ok(())
@@ -188,6 +235,37 @@ impl WhisperManager {
             &self.whisper_prompt,
             "--no-timestamps", // Just plain text, no timestamps
         ]);
+
+        cmd.arg("--no-speech-thold");
+        cmd.arg(format!("{}", self.no_speech_threshold));
+
+        if self.vad.is_active() {
+            if let Some(model_path) = &self.vad.model_path {
+                cmd.arg("--vad");
+                cmd.arg("--vad-model");
+                cmd.arg(model_path);
+
+                cmd.arg("--vad-threshold");
+                cmd.arg(format!("{}", self.vad.threshold));
+
+                cmd.arg("--vad-min-speech-duration-ms");
+                cmd.arg(format!("{}", self.vad.min_speech_ms));
+
+                cmd.arg("--vad-min-silence-duration-ms");
+                cmd.arg(format!("{}", self.vad.min_silence_ms));
+
+                if self.vad.max_speech_s.is_finite() {
+                    cmd.arg("--vad-max-speech-duration-s");
+                    cmd.arg(format!("{}", self.vad.max_speech_s));
+                }
+
+                cmd.arg("--vad-speech-pad-ms");
+                cmd.arg(format!("{}", self.vad.speech_pad_ms));
+
+                cmd.arg("--vad-samples-overlap");
+                cmd.arg(format!("{}", self.vad.samples_overlap));
+            }
+        }
 
         // GPU control: AUR version uses --no-gpu flag (opposite logic)
         // If gpu_layers == 0, disable GPU. Otherwise let it use GPU by default

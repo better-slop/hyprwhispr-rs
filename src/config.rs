@@ -57,6 +57,12 @@ pub struct Config {
 
     #[serde(default = "default_gpu_layers")]
     pub gpu_layers: i32,
+
+    #[serde(default)]
+    pub vad: VadConfig,
+
+    #[serde(default = "default_no_speech_threshold")]
+    pub no_speech_threshold: f32,
 }
 
 fn default_gpu_layers() -> i32 {
@@ -91,6 +97,66 @@ fn default_shift_paste() -> bool {
     true
 }
 
+fn default_no_speech_threshold() -> f32 {
+    0.60
+}
+
+fn default_vad_model() -> String {
+    "ggml-silero-v5.1.2.bin".to_string()
+}
+
+fn default_vad_threshold() -> f32 {
+    0.50
+}
+
+fn default_vad_min_speech_ms() -> u32 {
+    250
+}
+
+fn default_vad_min_silence_ms() -> u32 {
+    100
+}
+
+fn default_vad_max_speech_s() -> f32 {
+    f32::INFINITY
+}
+
+fn default_vad_speech_pad_ms() -> u32 {
+    30
+}
+
+fn default_vad_samples_overlap() -> f32 {
+    0.10
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VadConfig {
+    pub enabled: bool,
+    pub model: String,
+    pub threshold: f32,
+    pub min_speech_ms: u32,
+    pub min_silence_ms: u32,
+    pub max_speech_s: f32,
+    pub speech_pad_ms: u32,
+    pub samples_overlap: f32,
+}
+
+impl Default for VadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_vad_model(),
+            threshold: default_vad_threshold(),
+            min_speech_ms: default_vad_min_speech_ms(),
+            min_silence_ms: default_vad_min_silence_ms(),
+            max_speech_s: default_vad_max_speech_s(),
+            speech_pad_ms: default_vad_speech_pad_ms(),
+            samples_overlap: default_vad_samples_overlap(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -109,6 +175,8 @@ impl Default for Config {
             shift_paste: default_shift_paste(),
             audio_device: None,
             gpu_layers: default_gpu_layers(),
+            vad: VadConfig::default(),
+            no_speech_threshold: default_no_speech_threshold(),
         }
     }
 }
@@ -249,6 +317,10 @@ impl ConfigManager {
         Self::resolve_model_path(&config)
     }
 
+    pub fn get_vad_model_path(&self, config: &Config) -> Option<PathBuf> {
+        Self::resolve_vad_model_path(config, Some(&self.inner.config_path))
+    }
+
     pub fn get_whisper_binary_path(&self) -> PathBuf {
         let system_binary = PathBuf::from("/usr/bin/whisper-cli");
         if system_binary.exists() {
@@ -318,14 +390,10 @@ impl ConfigManager {
     }
 
     fn resolve_model_path(config: &Config) -> PathBuf {
-        let system_models = PathBuf::from("/usr/share/whisper/models");
-
-        let models_dir = if system_models.exists() {
-            system_models
-        } else {
-            let home = env::var("HOME").expect("HOME not set");
-            PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp/models")
-        };
+        let models_dir = Self::model_search_dirs()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| PathBuf::from("."));
 
         let model_name = &config.model;
         if model_name.ends_with(".en") {
@@ -338,5 +406,59 @@ impl ConfigManager {
         }
 
         models_dir.join(format!("ggml-{}.bin", model_name))
+    }
+
+    fn resolve_vad_model_path(config: &Config, config_path: Option<&Path>) -> Option<PathBuf> {
+        if !config.vad.enabled {
+            return None;
+        }
+
+        let model_ref = config.vad.model.trim();
+        if model_ref.is_empty() {
+            return None;
+        }
+
+        let candidate = PathBuf::from(model_ref);
+        if candidate.is_absolute() && candidate.exists() {
+            return Some(candidate);
+        }
+        if candidate.exists() {
+            return Some(candidate);
+        }
+
+        if let Some(base) = config_path.and_then(|p| p.parent()) {
+            let candidate = base.join(model_ref);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+
+        if let Some(project_dirs) = directories::ProjectDirs::from("", "", "hyprwhspr-rs") {
+            let cfg_candidate = project_dirs.config_dir().join(model_ref);
+            if cfg_candidate.exists() {
+                return Some(cfg_candidate);
+            }
+        }
+
+        for dir in Self::model_search_dirs() {
+            let candidate = dir.join(model_ref);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+
+        None
+    }
+
+    fn model_search_dirs() -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        let system_models = PathBuf::from("/usr/share/whisper/models");
+        if system_models.exists() {
+            dirs.push(system_models);
+        }
+        if let Ok(home) = env::var("HOME") {
+            dirs.push(PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp/models"));
+        }
+        dirs
     }
 }
