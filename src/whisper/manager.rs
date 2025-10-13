@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use tracing::{debug, info, warn};
 
+const NON_SPEECH_MARKERS: &[&str] = &["BLANK_AUDIO", "INAUDIBLE", "NO_SPEECH", "SILENCE"];
+
 #[derive(Debug, Clone)]
 pub struct WhisperVadOptions {
     pub enabled: bool,
@@ -154,6 +156,14 @@ impl WhisperManager {
 
         // Always clean up after successful transcription pass
         let _ = fs::remove_file(&temp_wav);
+
+        if Self::contains_only_non_speech_markers(&cleaned_transcription) {
+            debug!(
+                "Whisper produced only non-speech markers: {}",
+                cleaned_transcription
+            );
+            return Ok(String::new());
+        }
 
         if cleaned_transcription.trim().is_empty() {
             warn!("Whisper returned empty transcription");
@@ -335,6 +345,37 @@ impl WhisperManager {
         }
 
         trimmed.to_string()
+    }
+
+    fn contains_only_non_speech_markers(transcription: &str) -> bool {
+        let mut found_marker = false;
+
+        for raw_token in transcription.split_whitespace() {
+            let token = raw_token.trim_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | '"'));
+            if token.is_empty() {
+                continue;
+            }
+
+            if !token.starts_with('[') || !token.ends_with(']') {
+                return false;
+            }
+
+            let inner = token[1..token.len() - 1].trim();
+            if inner.is_empty() {
+                return false;
+            }
+
+            let normalized: String = inner.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+            let upper = normalized.to_ascii_uppercase();
+
+            if !NON_SPEECH_MARKERS.iter().any(|marker| *marker == upper) {
+                return false;
+            }
+
+            found_marker = true;
+        }
+
+        found_marker
     }
 
     fn is_prompt_artifact(transcription: &str, prompt: &str) -> bool {
