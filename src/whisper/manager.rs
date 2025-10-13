@@ -3,7 +3,7 @@ use regex::Regex;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 const NON_SPEECH_MARKERS: &[&str] = &["BLANK_AUDIO", "INAUDIBLE", "NO_SPEECH", "SILENCE"];
 
@@ -294,8 +294,8 @@ impl WhisperManager {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        debug!("Whisper stdout: {}", stdout);
-        debug!("Whisper stderr: {}", stderr);
+        trace!("Whisper stdout: {}", stdout);
+        trace!("Whisper stderr: {}", stderr);
 
         if !output.status.success() {
             warn!(

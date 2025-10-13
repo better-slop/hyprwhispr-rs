@@ -109,7 +109,6 @@ impl GlobalShortcuts {
                                     match value {
                                         // Key pressed
                                         1 => {
-                                            debug!("Key pressed: {:?}", key);
                                             pressed_keys.insert(key);
 
                                             // Check if target combination is pressed
@@ -128,6 +127,7 @@ impl GlobalShortcuts {
                                                 };
 
                                                 if should_trigger {
+                                                    debug!("✓ Combination active: {:?}", target_keys);
                                                     info!(
                                                         "✨ Shortcut triggered: {}",
                                                         shortcut_name
@@ -152,12 +152,12 @@ impl GlobalShortcuts {
                                         }
                                         // Key released
                                         0 => {
-                                            debug!("Key released: {:?}", key);
                                             pressed_keys.remove(&key);
 
                                             if combination_active
                                                 && !target_keys.is_subset(&pressed_keys)
                                             {
+                                                debug!("✗ Combination broken by releasing: {:?}", key);
                                                 combination_active = false;
 
                                                 if matches!(self.kind, ShortcutKind::Hold) {
