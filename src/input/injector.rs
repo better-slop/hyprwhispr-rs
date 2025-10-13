@@ -15,7 +15,7 @@ static CONTROL_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static CONTROL_TRAILING_SPACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[ \t]+([\n\t])").expect("valid trailing space cleanup regex"));
 static SYMBOL_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"([()\[\]\{\}])\s*[.!?,;:]+").expect("valid symbol artifact cleanup regex")
+    Regex::new(r"([()\[\]\{\}])\s*[.!?,]+").expect("valid symbol artifact cleanup regex")
 });
 static OPEN_PAREN_SPACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\( +").expect("valid open paren space cleanup regex"));
@@ -40,6 +40,7 @@ static DUPLICATE_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r",(?:\s*,)+").expect("valid duplicate comma cleanup regex"));
 static CAPITALIZE_AFTER_PERIOD_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\. ([a-z])").expect("valid sentence capitalization regex"));
+const MERGE_SYMBOLS: &[char] = &['-', '_', '+', '*', '/', '=', '~', '^'];
 
 #[derive(Clone, Copy)]
 struct SpeechReplacement {
@@ -267,11 +268,15 @@ static SPEECH_REPLACEMENTS: &[SpeechReplacement] = &[
 ];
 
 static SPEECH_REPLACEMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    let alternates = SPEECH_REPLACEMENTS
-        .iter()
+    let mut entries: Vec<&SpeechReplacement> = SPEECH_REPLACEMENTS.iter().collect();
+    entries.sort_by(|a, b| b.phrase.len().cmp(&a.phrase.len()));
+
+    let alternates = entries
+        .into_iter()
         .map(|entry| regex::escape(entry.phrase))
         .collect::<Vec<_>>()
         .join("|");
+
     let pattern = format!(r"(?i)\b(?P<command>{})\b[.!?,;:]*", alternates);
     Regex::new(&pattern).expect("valid speech replacement regex")
 });
@@ -307,6 +312,11 @@ fn apply_speech_replacements(text: &str) -> (String, usize) {
 
     result.push_str(&text[last_end..]);
     (result, count)
+}
+
+fn sanitize_word_overrides(mut overrides: HashMap<String, String>) -> HashMap<String, String> {
+    overrides.retain(|key, _| !key.eq_ignore_ascii_case("em dash"));
+    overrides
 }
 
 fn apply_speech_replacement_entry(buffer: &mut String, entry: &SpeechReplacement) {
@@ -360,6 +370,33 @@ fn capitalize_after_period(input: &str) -> (String, usize) {
     (result, count)
 }
 
+fn merge_separated_identical_symbols(input: &str) -> (String, usize) {
+    let mut total_count = 0;
+    let mut current = input.to_string();
+
+    for sym in MERGE_SYMBOLS {
+        let escaped = regex::escape(&sym.to_string());
+        let pattern = format!(r"{escaped}\s+{escaped}");
+        let regex =
+            Regex::new(&pattern).expect("valid identical symbol merge regex for specific symbol");
+        let replacement = format!("{sym}{sym}");
+
+        loop {
+            let matches = regex.find_iter(&current).count();
+            if matches == 0 {
+                break;
+            }
+
+            total_count += matches;
+            current = regex
+                .replace_all(&current, replacement.as_str())
+                .into_owned();
+        }
+    }
+
+    (current, total_count)
+}
+
 pub struct TextInjector {
     enigo: Enigo,
     clipboard: Clipboard,
@@ -378,10 +415,12 @@ impl TextInjector {
 
         let clipboard = Clipboard::new().context("Failed to initialize clipboard")?;
 
+        let sanitized_overrides = sanitize_word_overrides(word_overrides);
+
         Ok(Self {
             enigo,
             clipboard,
-            word_overrides,
+            word_overrides: sanitized_overrides,
             auto_copy_clipboard,
         })
     }
@@ -485,6 +524,21 @@ impl TextInjector {
             ));
         }
         current = collapsed;
+
+        let (merged_symbols, merge_count) = merge_separated_identical_symbols(&current);
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "merge_identical_symbols",
+                current.clone(),
+                merged_symbols.clone(),
+                if merge_count > 0 {
+                    Some(merge_count)
+                } else {
+                    None
+                },
+            ));
+        }
+        current = merged_symbols;
 
         let (capitalized, capitalized_count) = capitalize_after_period(&current);
         if let Some(ref mut logged_steps) = steps {
@@ -676,5 +730,40 @@ mod tests {
         let (capitalized, count) = capitalize_after_period(input);
         assert_eq!(capitalized, "This. Is awesome. Already Capitalized. Stays.");
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn speech_replacements_collapse_dash_dash() {
+        let input = "prepare dash dash go";
+        let (after_speech, count) = apply_speech_replacements(input);
+        assert_eq!(after_speech, "prepare -- go");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn control_cleanup_preserves_colon_after_symbols() {
+        let input = "— { chaos,  yes }:  coordinate";
+        let cleaned = clean_control_artifacts(input);
+        let collapsed = collapse_spaces(&cleaned);
+        assert_eq!(collapsed, "— { chaos, yes }: coordinate");
+    }
+
+    #[test]
+    fn merge_identical_symbols_collapses_spaced_pairs() {
+        let input = "77 - - go and _ _ done";
+        let (merged, count) = merge_separated_identical_symbols(input);
+        assert_eq!(merged, "77 -- go and __ done");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn sanitize_word_overrides_drops_em_dash() {
+        let overrides = HashMap::from([
+            ("em dash".to_string(), "—".to_string()),
+            ("under score".to_string(), "_".to_string()),
+        ]);
+        let sanitized = sanitize_word_overrides(overrides);
+        assert!(!sanitized.contains_key("em dash"));
+        assert_eq!(sanitized.get("under score").unwrap(), "_");
     }
 }
