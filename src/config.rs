@@ -12,9 +12,31 @@ use tokio::sync::watch;
 use tokio::time;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ShortcutsConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub press: Option<String>,
+}
+
+impl Default for ShortcutsConfig {
+    fn default() -> Self {
+        Self {
+            hold: None,
+            press: Some(default_primary_shortcut()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
-    #[serde(default = "default_primary_shortcut")]
+    #[serde(default = "default_primary_shortcut", skip_serializing)]
     pub primary_shortcut: String,
+
+    #[serde(default)]
+    pub shortcuts: ShortcutsConfig,
 
     #[serde(default = "default_model")]
     pub model: String,
@@ -159,8 +181,9 @@ impl Default for VadConfig {
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
+        let mut config = Self {
             primary_shortcut: default_primary_shortcut(),
+            shortcuts: ShortcutsConfig::default(),
             model: default_model(),
             fallback_cli: false,
             threads: default_threads(),
@@ -177,6 +200,60 @@ impl Default for Config {
             gpu_layers: default_gpu_layers(),
             vad: VadConfig::default(),
             no_speech_threshold: default_no_speech_threshold(),
+        };
+        config.normalize_shortcuts();
+        config
+    }
+}
+
+impl Config {
+    pub fn normalize_shortcuts(&mut self) {
+        let legacy_primary = Self::sanitize_shortcut(&self.primary_shortcut);
+
+        self.shortcuts.press = self
+            .shortcuts
+            .press
+            .as_ref()
+            .and_then(|value| Self::sanitize_shortcut(value));
+        self.shortcuts.hold = self
+            .shortcuts
+            .hold
+            .as_ref()
+            .and_then(|value| Self::sanitize_shortcut(value));
+
+        if let (Some(current), Some(legacy)) = (&self.shortcuts.press, &legacy_primary) {
+            if current != legacy {
+                self.shortcuts.press = Some(legacy.clone());
+            }
+        } else if self.shortcuts.press.is_none() {
+            if let Some(legacy) = &legacy_primary {
+                self.shortcuts.press = Some(legacy.clone());
+            }
+        }
+
+        if let Some(press) = self.shortcuts.press.clone() {
+            self.primary_shortcut = press;
+        } else {
+            let fallback = legacy_primary.unwrap_or_else(default_primary_shortcut);
+            self.primary_shortcut = fallback.clone();
+            self.shortcuts.press = Some(fallback);
+        }
+    }
+
+    pub fn press_shortcut(&self) -> Option<&str> {
+        self.shortcuts.press.as_deref()
+    }
+
+    pub fn hold_shortcut(&self) -> Option<&str> {
+        self.shortcuts.hold.as_deref()
+    }
+
+    fn sanitize_shortcut(value: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
         }
     }
 }
@@ -372,7 +449,9 @@ impl ConfigManager {
     }
 
     fn write_config_file(path: &Path, config: &Config) -> Result<()> {
-        let json = serde_json::to_string_pretty(config).context("Failed to serialize config")?;
+        let mut config = config.clone();
+        config.normalize_shortcuts();
+        let json = serde_json::to_string_pretty(&config).context("Failed to serialize config")?;
         fs::write(path, json).with_context(|| format!("Failed to write config file at {:?}", path))
     }
 
@@ -380,7 +459,10 @@ impl ConfigManager {
         let value = parse_to_serde_value(content, &ParseOptions::default())
             .context("Failed to parse config as JSONC")?
             .ok_or_else(|| anyhow!("Config file did not contain a JSON value"))?;
-        serde_json::from_value(value).context("Failed to deserialize config")
+        let mut config: Config =
+            serde_json::from_value(value).context("Failed to deserialize config")?;
+        config.normalize_shortcuts();
+        Ok(config)
     }
 
     fn file_state(path: &Path) -> Option<(SystemTime, u64)> {

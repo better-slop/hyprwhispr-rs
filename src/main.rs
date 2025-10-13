@@ -33,7 +33,16 @@ async fn main() -> Result<()> {
     let config = config_manager.get();
     info!("✅ Configuration loaded");
     info!("   Model: {}", config.model);
-    info!("   Shortcut: {}", config.primary_shortcut);
+    if let Some(shortcut) = config.press_shortcut() {
+        info!("   Press shortcut: {}", shortcut);
+    } else {
+        info!("   Press shortcut: disabled");
+    }
+    if let Some(shortcut) = config.hold_shortcut() {
+        info!("   Hold shortcut: {}", shortcut);
+    } else {
+        info!("   Hold shortcut: disabled");
+    }
     info!("   Audio feedback: {}", config.audio_feedback);
 
     // Initialize application

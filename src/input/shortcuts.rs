@@ -10,19 +10,34 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShortcutKind {
+    Hold,
+    Press,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShortcutPhase {
+    Start,
+    End,
+}
+
 #[derive(Debug, Clone)]
 pub struct ShortcutEvent {
     pub triggered_at: Instant,
+    pub kind: ShortcutKind,
+    pub phase: ShortcutPhase,
 }
 
 pub struct GlobalShortcuts {
     devices: Vec<Device>,
     target_keys: HashSet<Key>,
     shortcut_name: String,
+    kind: ShortcutKind,
 }
 
 impl GlobalShortcuts {
-    pub fn new(shortcut: &str) -> Result<Self> {
+    pub fn new(shortcut: &str, kind: ShortcutKind) -> Result<Self> {
         let target_keys = Self::parse_shortcut(shortcut)?;
         let devices = Self::find_keyboard_devices()?;
 
@@ -30,9 +45,15 @@ impl GlobalShortcuts {
             return Err(anyhow::anyhow!("No keyboard devices found"));
         }
 
+        let mode_label = match kind {
+            ShortcutKind::Hold => "hold",
+            ShortcutKind::Press => "press",
+        };
+
         info!(
-            "Global shortcuts initialized - monitoring {} device(s) for: {}",
+            "Global shortcuts initialized - monitoring {} device(s) for {} shortcut: {}",
             devices.len(),
+            mode_label,
             shortcut
         );
         debug!("Target keys: {:?}", target_keys);
@@ -41,6 +62,7 @@ impl GlobalShortcuts {
             devices,
             target_keys,
             shortcut_name: shortcut.to_string(),
+            kind,
         })
     }
 
@@ -48,8 +70,16 @@ impl GlobalShortcuts {
         let mut pressed_keys: HashSet<Key> = HashSet::new();
         let mut last_trigger = Instant::now() - Duration::from_secs(10);
         let debounce_duration = Duration::from_millis(500);
+        let mut combination_active = false;
 
-        info!("🎯 Listening for shortcut: {}", self.shortcut_name);
+        let listen_label = match self.kind {
+            ShortcutKind::Hold => "hold",
+            ShortcutKind::Press => "press",
+        };
+        info!(
+            "🎯 Listening for {} shortcut: {}",
+            listen_label, self.shortcut_name
+        );
 
         loop {
             if stop.load(Ordering::Relaxed) {
@@ -76,22 +106,32 @@ impl GlobalShortcuts {
                                             pressed_keys.insert(key);
 
                                             // Check if target combination is pressed
-                                            if target_keys.is_subset(&pressed_keys) {
+                                            if target_keys.is_subset(&pressed_keys)
+                                                && !combination_active
+                                            {
                                                 let now = Instant::now();
 
                                                 // Debounce: only trigger if enough time has passed
-                                                if now.duration_since(last_trigger)
-                                                    > debounce_duration
-                                                {
+                                                let should_trigger = match self.kind {
+                                                    ShortcutKind::Hold => true,
+                                                    ShortcutKind::Press => {
+                                                        now.duration_since(last_trigger)
+                                                            > debounce_duration
+                                                    }
+                                                };
+
+                                                if should_trigger {
                                                     info!(
                                                         "✨ Shortcut triggered: {}",
                                                         shortcut_name
                                                     );
                                                     last_trigger = now;
+                                                    combination_active = true;
 
-                                                    // Send event (non-blocking)
                                                     if let Err(e) = tx.try_send(ShortcutEvent {
                                                         triggered_at: now,
+                                                        kind: self.kind,
+                                                        phase: ShortcutPhase::Start,
                                                     }) {
                                                         warn!(
                                                             "Failed to send shortcut event: {}",
@@ -107,6 +147,25 @@ impl GlobalShortcuts {
                                         0 => {
                                             debug!("Key released: {:?}", key);
                                             pressed_keys.remove(&key);
+
+                                            if combination_active
+                                                && !target_keys.is_subset(&pressed_keys)
+                                            {
+                                                combination_active = false;
+
+                                                if matches!(self.kind, ShortcutKind::Hold) {
+                                                    if let Err(e) = tx.try_send(ShortcutEvent {
+                                                        triggered_at: Instant::now(),
+                                                        kind: self.kind,
+                                                        phase: ShortcutPhase::End,
+                                                    }) {
+                                                        warn!(
+                                                            "Failed to send shortcut release event: {}",
+                                                            e
+                                                        );
+                                                    }
+                                                }
+                                            }
                                         }
                                         _ => {}
                                     }
