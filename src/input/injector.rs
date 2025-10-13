@@ -15,7 +15,7 @@ static CONTROL_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static CONTROL_TRAILING_SPACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[ \t]+([\n\t])").expect("valid trailing space cleanup regex"));
 static SYMBOL_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"([()\[\]\{\}])\s*[.!?,]+").expect("valid symbol artifact cleanup regex")
+    Regex::new(r"([()\[\]\{\}])\s*[.,;]+").expect("valid symbol artifact cleanup regex")
 });
 static OPEN_PAREN_SPACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\( +").expect("valid open paren space cleanup regex"));
@@ -38,9 +38,28 @@ static SPACE_BEFORE_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 static DUPLICATE_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r",(?:\s*,)+").expect("valid duplicate comma cleanup regex"));
-static CAPITALIZE_AFTER_PERIOD_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\. ([a-z])").expect("valid sentence capitalization regex"));
+static SPACE_BEFORE_NEWLINE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[ \t]+\n").expect("valid space before newline regex"));
+static SPACE_AFTER_NEWLINE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\n[ \t]+").expect("valid space after newline regex"));
 const MERGE_SYMBOLS: &[char] = &['-', '_', '+', '*', '/', '=', '~', '^'];
+static MERGE_SYMBOL_PATTERNS: LazyLock<Vec<(char, Regex)>> = LazyLock::new(|| {
+    MERGE_SYMBOLS
+        .iter()
+        .map(|sym| {
+            let escaped = regex::escape(&sym.to_string());
+            let pattern = format!(r"{escaped}\s+{escaped}");
+            (
+                *sym,
+                Regex::new(&pattern)
+                    .expect("valid identical symbol merge regex for specific symbol"),
+            )
+        })
+        .collect()
+});
+static UNDERSCORE_BRIDGE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"([^\s_])\s+(_+)\s+([^\s_])").expect("valid underscore bridge regex")
+});
 
 #[derive(Clone, Copy)]
 struct SpeechReplacement {
@@ -356,16 +375,33 @@ fn apply_speech_replacement_entry(buffer: &mut String, entry: &SpeechReplacement
 }
 
 fn capitalize_after_period(input: &str) -> (String, usize) {
+    let mut result = String::with_capacity(input.len());
+    let mut capitalize_next = true;
     let mut count = 0;
-    let result = CAPITALIZE_AFTER_PERIOD_REGEX
-        .replace_all(input, |caps: &regex::Captures<'_>| {
-            count += 1;
-            let upper = caps[1].chars().next().unwrap().to_uppercase();
-            let mut replacement = String::from(". ");
-            replacement.extend(upper);
-            replacement
-        })
-        .into_owned();
+
+    for ch in input.chars() {
+        let mut output_char = ch;
+
+        if capitalize_next {
+            if ch.is_ascii_lowercase() {
+                output_char = ch.to_ascii_uppercase();
+                count += 1;
+                capitalize_next = false;
+            } else if ch.is_ascii_uppercase() || ch.is_ascii_digit() {
+                capitalize_next = false;
+            } else if !ch.is_whitespace() {
+                capitalize_next = false;
+            }
+        }
+
+        result.push(output_char);
+
+        match ch {
+            '.' | '!' | '?' => capitalize_next = true,
+            '\n' => capitalize_next = true,
+            _ => {}
+        }
+    }
 
     (result, count)
 }
@@ -374,11 +410,7 @@ fn merge_separated_identical_symbols(input: &str) -> (String, usize) {
     let mut total_count = 0;
     let mut current = input.to_string();
 
-    for sym in MERGE_SYMBOLS {
-        let escaped = regex::escape(&sym.to_string());
-        let pattern = format!(r"{escaped}\s+{escaped}");
-        let regex =
-            Regex::new(&pattern).expect("valid identical symbol merge regex for specific symbol");
+    for (sym, regex) in MERGE_SYMBOL_PATTERNS.iter() {
         let replacement = format!("{sym}{sym}");
 
         loop {
@@ -395,6 +427,45 @@ fn merge_separated_identical_symbols(input: &str) -> (String, usize) {
     }
 
     (current, total_count)
+}
+
+fn collapse_underscore_spacing(input: &str) -> (String, usize) {
+    let mut total_count = 0;
+    let mut current = input.to_string();
+
+    loop {
+        let matches = UNDERSCORE_BRIDGE_REGEX.captures_iter(&current).count();
+        if matches == 0 {
+            break;
+        }
+
+        total_count += matches;
+        current = UNDERSCORE_BRIDGE_REGEX
+            .replace_all(&current, "$1$2$3")
+            .into_owned();
+    }
+
+    (current, total_count)
+}
+
+fn trim_spaces_around_newlines(input: &str) -> (String, usize) {
+    let mut count = 0;
+
+    let trailing_matches = SPACE_BEFORE_NEWLINE_REGEX.find_iter(input).count();
+    let without_trailing = SPACE_BEFORE_NEWLINE_REGEX
+        .replace_all(input, "\n")
+        .into_owned();
+    count += trailing_matches;
+
+    let leading_matches = SPACE_AFTER_NEWLINE_REGEX
+        .find_iter(&without_trailing)
+        .count();
+    let final_result = SPACE_AFTER_NEWLINE_REGEX
+        .replace_all(&without_trailing, "\n")
+        .into_owned();
+    count += leading_matches;
+
+    (final_result, count)
 }
 
 pub struct TextInjector {
@@ -525,6 +596,21 @@ impl TextInjector {
         }
         current = collapsed;
 
+        let (newline_cleaned, newline_trim_count) = trim_spaces_around_newlines(&current);
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "trim_spaces_around_newlines",
+                current.clone(),
+                newline_cleaned.clone(),
+                if newline_trim_count > 0 {
+                    Some(newline_trim_count)
+                } else {
+                    None
+                },
+            ));
+        }
+        current = newline_cleaned;
+
         let (merged_symbols, merge_count) = merge_separated_identical_symbols(&current);
         if let Some(ref mut logged_steps) = steps {
             logged_steps.push(PipelineStepRecord::new(
@@ -539,6 +625,21 @@ impl TextInjector {
             ));
         }
         current = merged_symbols;
+
+        let (bridged_underscores, underscore_count) = collapse_underscore_spacing(&current);
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "collapse_underscore_spacing",
+                current.clone(),
+                bridged_underscores.clone(),
+                if underscore_count > 0 {
+                    Some(underscore_count)
+                } else {
+                    None
+                },
+            ));
+        }
+        current = bridged_underscores;
 
         let (capitalized, capitalized_count) = capitalize_after_period(&current);
         if let Some(ref mut logged_steps) = steps {
@@ -749,10 +850,41 @@ mod tests {
     }
 
     #[test]
+    fn control_cleanup_keeps_exclamation_after_closing_symbol() {
+        let input = "phoenix [ alpha, beta ]!";
+        let cleaned = clean_control_artifacts(input);
+        assert_eq!(cleaned, "phoenix [ alpha, beta ]!");
+    }
+
+    #[test]
     fn merge_identical_symbols_collapses_spaced_pairs() {
         let input = "77 - - go and _ _ done";
         let (merged, count) = merge_separated_identical_symbols(input);
         assert_eq!(merged, "77 -- go and __ done");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn collapse_underscore_spacing_links_tokens() {
+        let input = "align __ sync and foo _ bar";
+        let (collapsed, count) = collapse_underscore_spacing(input);
+        assert_eq!(collapsed, "align__sync and foo_bar");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn trim_spaces_around_newlines_removes_padding() {
+        let input = "Line one  \n  Line two\n\n   Line three";
+        let (trimmed, count) = trim_spaces_around_newlines(input);
+        assert_eq!(trimmed, "Line one\nLine two\n\nLine three");
+        assert!(count >= 2);
+    }
+
+    #[test]
+    fn capitalizes_after_newline_break() {
+        let input = "first line.\nnext starts here.";
+        let (capitalized, count) = capitalize_after_period(input);
+        assert_eq!(capitalized, "First line.\nNext starts here.");
         assert_eq!(count, 2);
     }
 
