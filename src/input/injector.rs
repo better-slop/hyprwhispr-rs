@@ -38,6 +38,8 @@ static SPACE_BEFORE_PUNCT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 static DUPLICATE_COMMA_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r",(?:\s*,)+").expect("valid duplicate comma cleanup regex"));
+static CAPITALIZE_AFTER_PERIOD_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\. ([a-z])").expect("valid sentence capitalization regex"));
 
 #[derive(Clone, Copy)]
 struct SpeechReplacement {
@@ -343,6 +345,21 @@ fn apply_speech_replacement_entry(buffer: &mut String, entry: &SpeechReplacement
     }
 }
 
+fn capitalize_after_period(input: &str) -> (String, usize) {
+    let mut count = 0;
+    let result = CAPITALIZE_AFTER_PERIOD_REGEX
+        .replace_all(input, |caps: &regex::Captures<'_>| {
+            count += 1;
+            let upper = caps[1].chars().next().unwrap().to_uppercase();
+            let mut replacement = String::from(". ");
+            replacement.extend(upper);
+            replacement
+        })
+        .into_owned();
+
+    (result, count)
+}
+
 pub struct TextInjector {
     enigo: Enigo,
     clipboard: Clipboard,
@@ -468,6 +485,21 @@ impl TextInjector {
             ));
         }
         current = collapsed;
+
+        let (capitalized, capitalized_count) = capitalize_after_period(&current);
+        if let Some(ref mut logged_steps) = steps {
+            logged_steps.push(PipelineStepRecord::new(
+                "capitalize_after_period",
+                current.clone(),
+                capitalized.clone(),
+                if capitalized_count > 0 {
+                    Some(capitalized_count)
+                } else {
+                    None
+                },
+            ));
+        }
+        current = capitalized;
 
         let trimmed = current.trim().to_string();
         if let Some(ref mut logged_steps) = steps {
@@ -636,5 +668,13 @@ mod tests {
             "This is awesome. I love this, Fuck. Yeah, Fuck."
         );
         assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn capitalizes_lowercase_after_period_space() {
+        let input = "This. is awesome. already Capitalized. stays.";
+        let (capitalized, count) = capitalize_after_period(input);
+        assert_eq!(capitalized, "This. Is awesome. Already Capitalized. Stays.");
+        assert_eq!(count, 3);
     }
 }
