@@ -3,8 +3,7 @@
   <h3>hyprwhspr-rs</h3>
   <p>Rust implementation of <a href="https://github.com/goodroot/hyprwhspr">hyprwhspr</a> | Native speech-to-text voice dictation for Hyprland.</p>
 </div>
-
-
+<hr />
 
 # Requirements
 
