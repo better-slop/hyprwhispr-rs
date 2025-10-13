@@ -130,11 +130,6 @@ impl GlobalShortcuts {
         Ok(())
     }
 
-    fn is_target_combination(&self, pressed: &HashSet<Key>) -> bool {
-        // Check if all target keys are pressed
-        self.target_keys.is_subset(pressed)
-    }
-
     fn parse_shortcut(shortcut: &str) -> Result<HashSet<Key>> {
         let mut keys = HashSet::new();
 

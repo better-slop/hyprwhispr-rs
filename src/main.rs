@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     let app = HyprwhsprApp::new(config_manager)?;
 
     // Set up signal handling
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
     #[cfg(unix)]
     {

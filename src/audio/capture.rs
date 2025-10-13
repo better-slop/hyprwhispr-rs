@@ -6,7 +6,6 @@ use tracing::{debug, error, info, warn};
 
 pub struct AudioCapture {
     sample_rate: u32,
-    device_name: String,
 }
 
 pub struct RecordingSession {
@@ -25,10 +24,7 @@ impl AudioCapture {
 
         info!("Using audio input device: {}", device_name);
 
-        Ok(Self {
-            sample_rate: 16000,
-            device_name,
-        })
+        Ok(Self { sample_rate: 16000 })
     }
 
     pub fn start_recording(&self) -> Result<RecordingSession> {
@@ -70,7 +66,8 @@ impl AudioCapture {
         // Start the stream
         stream.play().context("Failed to start audio stream")?;
 
-        info!("✅ Audio recording started");
+        let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+        info!("✅ Audio recording started on {}", device_name);
 
         Ok(RecordingSession { stream, audio_data })
     }
