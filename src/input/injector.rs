@@ -525,21 +525,27 @@ impl TextInjector {
 
         info!("Injecting text: {} characters", processed.len());
 
-        // Copy to clipboard (for backup/manual paste if needed) - if enabled
-        if self.auto_copy_clipboard {
-            if let Err(e) = self.clipboard.set_text(&processed) {
-                warn!("Failed to copy to clipboard: {}", e);
-            } else {
-                debug!("Text copied to clipboard");
-            }
-        }
+        // Copy to clipboard - required for paste injection method
+        self.clipboard.set_text(&processed)
+            .context("Failed to copy text to clipboard")?;
+        debug!("Text copied to clipboard");
 
-        // Inject text directly with enigo
-        self.enigo
-            .text(&processed)
-            .context("Failed to inject text with Enigo")?;
+        // Small delay to ensure window focus is ready for input (especially on Wayland/XWayland)
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        debug!("Text injected successfully");
+        // Use Ctrl+V to paste from clipboard (more reliable on Wayland than virtual keyboard)
+        debug!("Injecting text via Ctrl+V paste...");
+        use enigo::{Direction, Key};
+        
+        // Press Ctrl+V
+        self.enigo.key(Key::Control, Direction::Press)
+            .context("Failed to press Ctrl")?;
+        self.enigo.key(Key::Unicode('v'), Direction::Click)
+            .context("Failed to press V")?;
+        self.enigo.key(Key::Control, Direction::Release)
+            .context("Failed to release Ctrl")?;
+
+        info!("✅ Text injected successfully via paste");
         Ok(())
     }
 

@@ -421,7 +421,9 @@ impl HyprwhsprApp {
         if !audio_data.is_empty() {
             self.is_processing = true;
             if let Err(e) = self.process_audio(audio_data).await {
-                error!("Error processing audio: {}", e);
+                error!("❌ Error processing audio: {:#}", e);
+                // Show user-friendly error notification
+                warn!("Failed to process recording. Check logs for details.");
             }
             self.is_processing = false;
         } else {
@@ -439,8 +441,12 @@ impl HyprwhsprApp {
             return Ok(());
         }
 
+        info!("📝 Transcription: \"{}\"", transcription);
+
         let text_injector = Arc::clone(&self.text_injector);
         let mut injector = text_injector.lock().await;
+        
+        debug!("⌨️  Injecting text into active application...");
         injector.inject_text(&transcription).await?;
 
         Ok(())
