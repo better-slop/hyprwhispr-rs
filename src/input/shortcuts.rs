@@ -127,7 +127,10 @@ impl GlobalShortcuts {
                                                 };
 
                                                 if should_trigger {
-                                                    debug!("✓ Combination active: {:?}", target_keys);
+                                                    debug!(
+                                                        "✓ Combination active: {:?}",
+                                                        target_keys
+                                                    );
                                                     info!(
                                                         "✨ Shortcut triggered: {}",
                                                         shortcut_name
@@ -157,7 +160,10 @@ impl GlobalShortcuts {
                                             if combination_active
                                                 && !target_keys.is_subset(&pressed_keys)
                                             {
-                                                debug!("✗ Combination broken by releasing: {:?}", key);
+                                                debug!(
+                                                    "✗ Combination broken by releasing: {:?}",
+                                                    key
+                                                );
                                                 combination_active = false;
 
                                                 if matches!(self.kind, ShortcutKind::Hold) {
