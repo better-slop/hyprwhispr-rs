@@ -533,15 +533,19 @@ impl TextInjector {
         // Small delay to ensure window focus is ready for input (especially on Wayland/XWayland)
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // Use Ctrl+V to paste from clipboard (more reliable on Wayland than virtual keyboard)
-        debug!("Injecting text via Ctrl+V paste...");
+        // Use Ctrl+Shift+V to paste from clipboard (works in terminals and GUI apps)
+        debug!("Injecting text via Ctrl+Shift+V paste...");
         use enigo::{Direction, Key};
         
-        // Press Ctrl+V
+        // Press Ctrl+Shift+V
         self.enigo.key(Key::Control, Direction::Press)
             .context("Failed to press Ctrl")?;
+        self.enigo.key(Key::Shift, Direction::Press)
+            .context("Failed to press Shift")?;
         self.enigo.key(Key::Unicode('v'), Direction::Click)
             .context("Failed to press V")?;
+        self.enigo.key(Key::Shift, Direction::Release)
+            .context("Failed to release Shift")?;
         self.enigo.key(Key::Control, Direction::Release)
             .context("Failed to release Ctrl")?;
 
