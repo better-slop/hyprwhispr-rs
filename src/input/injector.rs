@@ -125,12 +125,16 @@ impl HyprlandDispatcher {
         target: Option<&str>,
     ) -> Result<()> {
         let mods_segment = if modifiers.is_empty() {
-            "NULL".to_string()
+            String::new()
         } else {
             modifiers.join(" ")
         };
-        let target_segment = target.map(|t| format!(",{t}")).unwrap_or_default();
-        let command = format!("dispatch sendshortcut {mods_segment}, {key}{target_segment}");
+        let target_segment = target.map(|t| format!(", {t}")).unwrap_or_default();
+        let command = if mods_segment.is_empty() {
+            format!("dispatch sendshortcut {key}{target_segment}")
+        } else {
+            format!("dispatch sendshortcut {mods_segment}, {key}{target_segment}")
+        };
         let response = self.send_command(&command).await?;
         if response.is_empty() || response.eq_ignore_ascii_case("ok") {
             Ok(())
@@ -140,18 +144,38 @@ impl HyprlandDispatcher {
     }
 
     async fn active_window_class(&self) -> Result<Option<String>> {
-        let response = self.send_command("j/activewindow").await?;
-        if response.trim().is_empty() {
-            return Ok(None);
+        const COMMANDS: &[(&str, &str)] =
+            &[("activewindow", "plain"), ("j/activewindow", "legacy-json")];
+
+        for (command, label) in COMMANDS {
+            let response = self.send_command(command).await?;
+            let trimmed = response.trim();
+
+            if trimmed.is_empty() {
+                debug!(command, "Hyprland activewindow returned empty string");
+                return Ok(None);
+            }
+
+            if trimmed.eq_ignore_ascii_case("unknown request") {
+                debug!(
+                    command,
+                    "Hyprland does not recognize activewindow request variant ({label})"
+                );
+                continue;
+            }
+
+            match Self::extract_window_class_from_response(trimmed) {
+                Ok(class) => return Ok(class),
+                Err(err) => {
+                    debug!(
+                        command,
+                        response, "Hyprland activewindow parse failed via {label}: {err}"
+                    );
+                }
+            }
         }
 
-        let value: Value = serde_json::from_str(&response)
-            .context("Failed to parse Hyprland activewindow JSON")?;
-        let class = value
-            .get("class")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        Ok(class)
+        Ok(None)
     }
 
     async fn send_command(&self, command: &str) -> Result<String> {
@@ -171,16 +195,45 @@ impl HyprlandDispatcher {
             .await
             .with_context(|| format!("Failed to send IPC command: {command}"))?;
         stream
-            .shutdown()
+            .flush()
             .await
-            .context("Failed to shutdown Hyprland IPC stream after write")?;
+            .context("Failed to flush Hyprland IPC command")?;
 
         let mut response = Vec::new();
         stream
             .read_to_end(&mut response)
             .await
             .context("Failed to read Hyprland IPC response")?;
-        Ok(String::from_utf8_lossy(&response).trim().to_string())
+        let text = String::from_utf8_lossy(&response).trim().to_string();
+        debug!(
+            command,
+            response = text.as_str(),
+            "Hyprland IPC response (trimmed)"
+        );
+        Ok(text)
+    }
+
+    fn extract_window_class_from_response(response: &str) -> Result<Option<String>> {
+        if response.is_empty() {
+            return Ok(None);
+        }
+
+        if let Ok(value) = serde_json::from_str::<Value>(response) {
+            return Ok(value
+                .get("class")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()));
+        }
+
+        for line in response.lines() {
+            if let Some((key, value)) = line.trim().split_once(':') {
+                if key.trim().eq_ignore_ascii_case("class") {
+                    return Ok(Some(value.trim().to_string()));
+                }
+            }
+        }
+
+        Err(anyhow!("No class entry found in Hyprland response"))
     }
 }
 
@@ -689,10 +742,10 @@ impl TextInjector {
                 }
             }
 
-            match dispatcher
-                .send_paste_shortcut(shift_hint.unwrap_or(false))
-                .await
-            {
+            let use_shift = shift_hint.unwrap_or(true);
+            debug!(use_shift, "Hyprland sendshortcut paste attempt");
+
+            match dispatcher.send_paste_shortcut(use_shift).await {
                 Ok(_) => {
                     info!("✅ Text injected via Hyprland sendshortcut");
                     return Ok(());
@@ -1195,5 +1248,23 @@ mod tests {
         let sanitized = sanitize_word_overrides(overrides);
         assert!(!sanitized.contains_key("em dash"));
         assert_eq!(sanitized.get("under score").unwrap(), "_");
+    }
+
+    #[test]
+    fn extracts_class_from_plain_hyprland_output() {
+        let sample = r#"
+Address: 0x123456
+Class: kitty
+Title: sample
+"#;
+        let class = super::HyprlandDispatcher::extract_window_class_from_response(sample).unwrap();
+        assert_eq!(class, Some("kitty".to_string()));
+    }
+
+    #[test]
+    fn extracts_class_from_json_hyprland_output() {
+        let sample = r#"{"address":"0x123","class":"foot","title":"shell"}"#;
+        let class = super::HyprlandDispatcher::extract_window_class_from_response(sample).unwrap();
+        assert_eq!(class, Some("foot".to_string()));
     }
 }
