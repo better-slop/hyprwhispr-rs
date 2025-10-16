@@ -76,6 +76,33 @@
 }
 ```
 
+## Speech-to-text backends
+
+hyprwhspr-rs now supports multiple backends:
+
+- **Local Whisper (default):** Uses your installed `whisper.cpp` binary and local models. This mode continues to work with your existing configuration.
+- **Groq Cloud Whisper:** Streams audio to Groq's hosted `whisper-large-v3` model via their OpenAI-compatible API.
+
+To enable the Groq backend you can either update your config:
+
+```jsonc
+{
+  // ...existing config...
+  "backend": "groq"
+}
+```
+
+or pass `--groq` on the CLI (the flag takes precedence over the config value).
+
+Set your API key before launching:
+
+```bash
+export GROQ_API_KEY=sk-your-key
+./target/release/hyprwhspr-rs --groq
+```
+
+When using Groq we send audio as an in-memory WAV file with `response_format=json` and consume the `text` field from the response. The backend selection is logged on startup so you can confirm which mode is active.
+
 # Development
 
 1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`

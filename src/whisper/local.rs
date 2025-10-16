@@ -1,9 +1,12 @@
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use regex::Regex;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{debug, info, trace, warn};
+
+use super::{transcriber::Transcriber, wav::pcm_f32_to_wav_bytes};
 
 const NON_SPEECH_MARKERS: &[&str] = &["BLANK_AUDIO", "INAUDIBLE", "NO_SPEECH", "SILENCE"];
 
@@ -38,7 +41,7 @@ impl WhisperVadOptions {
     }
 }
 
-pub struct WhisperManager {
+pub struct LocalWhisper {
     model_path: PathBuf,
     binary_path: PathBuf,
     threads: usize,
@@ -49,7 +52,7 @@ pub struct WhisperManager {
     no_speech_threshold: f32,
 }
 
-impl WhisperManager {
+impl LocalWhisper {
     pub fn new(
         model_path: PathBuf,
         binary_path: PathBuf,
@@ -134,19 +137,23 @@ impl WhisperManager {
         "CPU only (no GPU detected)".to_string()
     }
 
-    pub async fn transcribe(&self, audio_data: Vec<f32>) -> Result<String> {
+    async fn transcribe_internal(
+        &self,
+        audio_data: Vec<f32>,
+        sample_rate_hz: u32,
+    ) -> Result<String> {
         if audio_data.is_empty() {
             return Ok(String::new());
         }
 
-        let duration_secs = audio_data.len() as f32 / 16000.0;
+        let duration_secs = audio_data.len() as f32 / sample_rate_hz as f32;
         info!("🧠 Transcribing {:.2}s of audio...", duration_secs);
 
         // Save audio to temporary WAV file
         let temp_wav = self
             .temp_dir
             .join(format!("audio_{}.wav", std::process::id()));
-        self.save_audio_as_wav(&audio_data, &temp_wav)?;
+        self.save_audio_as_wav(&audio_data, sample_rate_hz, &temp_wav)?;
 
         debug!("Saved audio to: {:?}", temp_wav);
 
@@ -180,54 +187,19 @@ impl WhisperManager {
         Ok(cleaned_transcription)
     }
 
-    fn save_audio_as_wav(&self, audio_data: &[f32], path: &PathBuf) -> Result<()> {
-        use std::io::Write;
-
-        // Convert f32 samples to i16
-        let samples_i16: Vec<i16> = audio_data
-            .iter()
-            .map(|&sample| (sample * 32767.0).clamp(-32768.0, 32767.0) as i16)
-            .collect();
-
-        // WAV file header
-        let mut file = fs::File::create(path)?;
-
-        let channels: u16 = 1;
-        let sample_rate: u32 = 16000;
-        let bits_per_sample: u16 = 16;
-        let byte_rate = sample_rate * channels as u32 * bits_per_sample as u32 / 8;
-        let block_align = channels * bits_per_sample / 8;
-        let data_size = (samples_i16.len() * 2) as u32;
-
-        // RIFF header
-        file.write_all(b"RIFF")?;
-        file.write_all(&(36 + data_size).to_le_bytes())?;
-        file.write_all(b"WAVE")?;
-
-        // fmt chunk
-        file.write_all(b"fmt ")?;
-        file.write_all(&16u32.to_le_bytes())?; // Chunk size
-        file.write_all(&1u16.to_le_bytes())?; // Audio format (PCM)
-        file.write_all(&channels.to_le_bytes())?;
-        file.write_all(&sample_rate.to_le_bytes())?;
-        file.write_all(&byte_rate.to_le_bytes())?;
-        file.write_all(&block_align.to_le_bytes())?;
-        file.write_all(&bits_per_sample.to_le_bytes())?;
-
-        // data chunk
-        file.write_all(b"data")?;
-        file.write_all(&data_size.to_le_bytes())?;
-
-        // Write samples
-        for sample in samples_i16 {
-            file.write_all(&sample.to_le_bytes())?;
-        }
-
+    fn save_audio_as_wav(
+        &self,
+        audio_data: &[f32],
+        sample_rate_hz: u32,
+        path: &Path,
+    ) -> Result<()> {
+        let wav_bytes = pcm_f32_to_wav_bytes(audio_data, sample_rate_hz)?;
+        fs::write(path, wav_bytes).context("Failed to write WAV audio to disk")?;
         debug!("Saved audio to WAV: {:?}", path);
         Ok(())
     }
 
-    async fn run_whisper_cli(&self, audio_file: &PathBuf) -> Result<String> {
+    async fn run_whisper_cli(&self, audio_file: &Path) -> Result<String> {
         let mut cmd = Command::new(&self.binary_path);
 
         // Basic args
@@ -406,5 +378,12 @@ impl WhisperManager {
         }
 
         false
+    }
+}
+
+#[async_trait]
+impl Transcriber for LocalWhisper {
+    async fn transcribe(&self, audio: Vec<f32>, sample_rate_hz: u32) -> Result<String> {
+        self.transcribe_internal(audio, sample_rate_hz).await
     }
 }

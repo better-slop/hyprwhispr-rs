@@ -11,6 +11,7 @@ pub struct AudioCapture {
 pub struct RecordingSession {
     stream: cpal::Stream,
     audio_data: Arc<Mutex<Vec<f32>>>,
+    sample_rate_hz: u32,
 }
 
 impl AudioCapture {
@@ -69,7 +70,15 @@ impl AudioCapture {
         let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
         info!("✅ Audio recording started on {}", device_name);
 
-        Ok(RecordingSession { stream, audio_data })
+        Ok(RecordingSession {
+            stream,
+            audio_data,
+            sample_rate_hz: self.sample_rate,
+        })
+    }
+
+    pub fn sample_rate_hz(&self) -> u32 {
+        self.sample_rate
     }
 
     pub fn get_available_devices() -> Result<Vec<String>> {
@@ -88,16 +97,22 @@ impl AudioCapture {
 
 impl RecordingSession {
     pub fn stop(self) -> Result<Vec<f32>> {
+        let RecordingSession {
+            stream,
+            audio_data,
+            sample_rate_hz,
+        } = self;
+
         // Drop the stream (stops recording)
-        drop(self.stream);
+        drop(stream);
 
         // Extract the recorded audio
-        let audio_data = Arc::try_unwrap(self.audio_data)
+        let audio_data = Arc::try_unwrap(audio_data)
             .map_err(|_| anyhow::anyhow!("Failed to unwrap audio data"))?
             .into_inner()
             .map_err(|_| anyhow::anyhow!("Failed to lock audio data"))?;
 
-        let duration_secs = audio_data.len() as f32 / 16000.0;
+        let duration_secs = audio_data.len() as f32 / sample_rate_hz as f32;
         info!(
             "🛑 Audio recording stopped - captured {} samples ({:.2}s)",
             audio_data.len(),

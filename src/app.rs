@@ -8,10 +8,10 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
-use crate::config::{Config, ConfigManager, ShortcutsConfig};
+use crate::config::{Config, ConfigManager, ShortcutsConfig, SttBackend};
 use crate::input::{GlobalShortcuts, ShortcutEvent, ShortcutKind, ShortcutPhase, TextInjector};
 use crate::status::StatusWriter;
-use crate::whisper::{WhisperManager, WhisperVadOptions};
+use crate::whisper::{GroqClient, LocalWhisper, Transcriber, WhisperVadOptions};
 
 struct ShortcutListener {
     stop_flag: Arc<AtomicBool>,
@@ -100,11 +100,50 @@ fn build_vad_options(config_manager: &ConfigManager, config: &Config) -> Whisper
     }
 }
 
+fn initialize_local_whisper(
+    config_manager: &ConfigManager,
+    config: &Config,
+) -> Result<LocalWhisper> {
+    let vad_options = build_vad_options(config_manager, config);
+    let whisper = LocalWhisper::new(
+        config_manager.get_model_path(),
+        config_manager.get_whisper_binary_path(),
+        config.threads,
+        config.whisper_prompt.clone(),
+        config_manager.get_temp_dir(),
+        config.gpu_layers,
+        vad_options,
+        config.no_speech_threshold,
+    )?;
+    whisper.initialize()?;
+    Ok(whisper)
+}
+
+fn build_transcriber_for_backend(
+    config_manager: &ConfigManager,
+    config: &Config,
+    backend: SttBackend,
+) -> Result<Box<dyn Transcriber>> {
+    match backend {
+        SttBackend::Local => Ok(Box::new(initialize_local_whisper(config_manager, config)?)),
+        SttBackend::Groq => Ok(Box::new(GroqClient::new()?)),
+    }
+}
+
+fn log_backend_selection(backend: SttBackend) {
+    match backend {
+        SttBackend::Local => info!("Backend: LocalWhisper"),
+        SttBackend::Groq => info!("Backend: Groq (model=whisper-large-v3)"),
+    }
+}
+
 pub struct HyprwhsprApp {
     config_manager: ConfigManager,
     audio_capture: AudioCapture,
     audio_feedback: AudioFeedback,
-    whisper_manager: WhisperManager,
+    transcriber: Box<dyn Transcriber>,
+    backend: SttBackend,
+    backend_override: Option<SttBackend>,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
     shortcut_tx: mpsc::Sender<ShortcutEvent>,
@@ -119,6 +158,13 @@ pub struct HyprwhsprApp {
 
 impl HyprwhsprApp {
     pub fn new(config_manager: ConfigManager) -> Result<Self> {
+        Self::new_with_backend(config_manager, None)
+    }
+
+    pub fn new_with_backend(
+        config_manager: ConfigManager,
+        backend_override: Option<SttBackend>,
+    ) -> Result<Self> {
         let config = config_manager.get();
 
         let audio_capture = AudioCapture::new().context("Failed to initialize audio capture")?;
@@ -133,22 +179,10 @@ impl HyprwhsprApp {
             config.stop_sound_volume,
         );
 
-        let vad_options = build_vad_options(&config_manager, &config);
-
-        let whisper_manager = WhisperManager::new(
-            config_manager.get_model_path(),
-            config_manager.get_whisper_binary_path(),
-            config.threads,
-            config.whisper_prompt.clone(),
-            config_manager.get_temp_dir(),
-            config.gpu_layers,
-            vad_options,
-            config.no_speech_threshold,
-        )?;
-
-        whisper_manager
-            .initialize()
-            .context("Failed to initialize Whisper")?;
+        let selected_backend = backend_override.unwrap_or_else(|| config.stt_backend());
+        let transcriber = build_transcriber_for_backend(&config_manager, &config, selected_backend)
+            .context("Failed to initialize speech-to-text backend")?;
+        log_backend_selection(selected_backend);
 
         let text_injector = TextInjector::new(
             config.shift_paste,
@@ -165,7 +199,9 @@ impl HyprwhsprApp {
             config_manager,
             audio_capture,
             audio_feedback,
-            whisper_manager,
+            transcriber,
+            backend: selected_backend,
+            backend_override,
             text_injector: Arc::new(Mutex::new(text_injector)),
             status_writer,
             shortcut_tx,
@@ -289,7 +325,10 @@ impl HyprwhsprApp {
             new_config.auto_copy_clipboard,
         )?;
 
-        let whisper_changed = self.current_config.model != new_config.model
+        let desired_backend = self.backend_override.unwrap_or(new_config.stt_backend());
+        let backend_changed = desired_backend != self.backend;
+
+        let local_config_changed = self.current_config.model != new_config.model
             || self.current_config.whisper_prompt != new_config.whisper_prompt
             || self.current_config.threads != new_config.threads
             || self.current_config.gpu_layers != new_config.gpu_layers
@@ -297,20 +336,16 @@ impl HyprwhsprApp {
             || (self.current_config.no_speech_threshold - new_config.no_speech_threshold).abs()
                 > f32::EPSILON;
 
-        if whisper_changed {
-            let vad_options = build_vad_options(&self.config_manager, &new_config);
-            let manager = WhisperManager::new(
-                self.config_manager.get_model_path(),
-                self.config_manager.get_whisper_binary_path(),
-                new_config.threads,
-                new_config.whisper_prompt.clone(),
-                self.config_manager.get_temp_dir(),
-                new_config.gpu_layers,
-                vad_options,
-                new_config.no_speech_threshold,
-            )?;
-            manager.initialize()?;
-            self.whisper_manager = manager;
+        if backend_changed {
+            self.transcriber =
+                build_transcriber_for_backend(&self.config_manager, &new_config, desired_backend)
+                    .context("Failed to switch speech-to-text backend")?;
+            log_backend_selection(desired_backend);
+            self.backend = desired_backend;
+        } else if matches!(desired_backend, SttBackend::Local) && local_config_changed {
+            self.transcriber =
+                build_transcriber_for_backend(&self.config_manager, &new_config, desired_backend)
+                    .context("Failed to refresh local Whisper backend")?;
         }
 
         let shortcuts_changed = new_config.shortcuts != self.current_config.shortcuts
@@ -434,7 +469,11 @@ impl HyprwhsprApp {
     }
 
     async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
-        let transcription = self.whisper_manager.transcribe(audio_data).await?;
+        let sample_rate_hz = self.audio_capture.sample_rate_hz();
+        let transcription = self
+            .transcriber
+            .transcribe(audio_data, sample_rate_hz)
+            .await?;
 
         if transcription.trim().is_empty() {
             warn!("Empty transcription, nothing to inject");

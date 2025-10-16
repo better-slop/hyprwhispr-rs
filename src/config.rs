@@ -30,6 +30,19 @@ impl Default for ShortcutsConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SttBackend {
+    Local,
+    Groq,
+}
+
+impl Default for SttBackend {
+    fn default() -> Self {
+        SttBackend::Local
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     #[serde(default = "default_primary_shortcut", skip_serializing)]
@@ -40,6 +53,9 @@ pub struct Config {
 
     #[serde(default = "default_model")]
     pub model: String,
+
+    #[serde(default)]
+    pub backend: SttBackend,
 
     #[serde(default)]
     pub fallback_cli: bool,
@@ -188,6 +204,7 @@ impl Default for Config {
             primary_shortcut: default_primary_shortcut(),
             shortcuts: ShortcutsConfig::default(),
             model: default_model(),
+            backend: SttBackend::default(),
             fallback_cli: false,
             threads: default_threads(),
             word_overrides: HashMap::new(),
@@ -250,6 +267,10 @@ impl Config {
 
     pub fn hold_shortcut(&self) -> Option<&str> {
         self.shortcuts.hold.as_deref()
+    }
+
+    pub fn stt_backend(&self) -> SttBackend {
+        self.backend
     }
 
     fn sanitize_shortcut(value: &str) -> Option<String> {
