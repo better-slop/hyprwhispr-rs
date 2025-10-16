@@ -5,15 +5,17 @@
 </div>
 <hr />
 
+> ⚠️ **Experimental:** This application is highly opinionated, and its defaults may not work for you. I am exploring more ergonomic defaults... expect breaking changes.
+
 # Requirements
 
 - whisper.cpp ([GitHub](https://github.com/ggml-org/whisper.cpp), [AUR](https://aur.archlinux.org/packages/whisper.cpp))
 
-# Hyprland Integration
+# Built for Hyprland
 
 - Detects Hyprland via `HYPRLAND_INSTANCE_SIGNATURE` and opens the IPC socket at `$XDG_RUNTIME_DIR/hypr/<signature>/.socket.sock`.
-- Issues `dispatch sendshortcut` commands against the active window to paste dictated text, inspecting `activewindow` to decide when `Shift` is required for terminal emulators.
-- Falls back to a Wayland virtual keyboard client or a simulated keypress paste if IPC communication fails, ensuring dictation still completes.
+- Execs `dispatch sendshortcut` commands against the active window to paste dictated text, inspecting `activewindow` to decide when `Shift` is required for a hardcoded list of programs.
+- Falls back to a Wayland virtual keyboard client or a simulated keypress paste if IPC communication fails.
 
 # Example Configuration
 
@@ -80,5 +82,5 @@
 2. `cd hyprwhspr-rs`
 3. `cargo build --release`
 4. Run using:
-    - Nice logs with pretty text transformation diffs: `RUST_LOG=debug ./target/release/hyprwhspr-rs --test`
+    - Nice logs with pretty text transformation diffs: `RUST_LOG=debug ./target/release/hyprwhspr-rs`
     - Production release `./target/release/hyprwhspr-rs`
