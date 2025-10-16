@@ -29,6 +29,8 @@ evdev = "0.12"
 arboard = { version = "3", features = ["wayland-data-control"] }
 enigo = { version = "0.2", default-features = false, features = ["wayland"] }
 libc = "0.2"
+wl-clipboard-rs = "0.9"
+wrtype = "0.1"
 
 # Whisper (we'll try whisper-rs, but have subprocess fallback)
 whisper-rs = { version = "0.12", optional = true }

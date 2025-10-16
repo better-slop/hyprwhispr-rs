@@ -445,7 +445,7 @@ impl HyprwhsprApp {
 
         let text_injector = Arc::clone(&self.text_injector);
         let mut injector = text_injector.lock().await;
-        
+
         debug!("⌨️  Injecting text into active application...");
         injector.inject_text(&transcription).await?;
 

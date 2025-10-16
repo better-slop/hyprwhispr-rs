@@ -1,11 +1,18 @@
 use crate::logging::{record_text_pipeline, PipelineStepRecord, TextPipelineRecord};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use arboard::Clipboard;
 use enigo::{Enigo, Keyboard, Settings};
 use regex::Regex;
+use serde_json::Value;
 use std::collections::HashMap;
+use std::env;
+use std::path::PathBuf;
 use std::sync::LazyLock;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
 use tracing::{debug, info, warn};
+use wl_clipboard_rs::copy::{ClipboardType, Error as WlCopyError, MimeType, Options, Source};
+use wrtype::{Modifier, WrtypeClient};
 
 static SPACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r" +").expect("valid space collapse regex"));
@@ -60,6 +67,175 @@ static MERGE_SYMBOL_PATTERNS: LazyLock<Vec<(char, Regex)>> = LazyLock::new(|| {
 static UNDERSCORE_BRIDGE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"([^\s_])\s+(_+)\s+([^\s_])").expect("valid underscore bridge regex")
 });
+
+const SHIFT_PASTE_CLASSES: &[&str] = &[
+    "Alacritty",
+    "kitty",
+    "foot",
+    "WezTerm",
+    "org.wezfurlong.wezterm",
+    "org.gnome.Console",
+    "gnome-terminal-server",
+    "konsole",
+    "yakuake",
+    "terminator",
+    "tilix",
+    "termite",
+    "xfce4-terminal",
+    "wezterm-gui",
+    "rio",
+    "WarpTerminal",
+    "xterm",
+    "urxvt",
+];
+
+struct HyprlandDispatcher {
+    socket_path: PathBuf,
+}
+
+impl HyprlandDispatcher {
+    fn new() -> Option<Self> {
+        let runtime_dir = env::var("XDG_RUNTIME_DIR").ok()?;
+        let signature = env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
+        let socket_path = PathBuf::from(runtime_dir)
+            .join("hypr")
+            .join(signature)
+            .join(".socket.sock");
+
+        if socket_path.exists() {
+            Some(Self { socket_path })
+        } else {
+            None
+        }
+    }
+
+    async fn send_paste_shortcut(&self, use_shift: bool) -> Result<()> {
+        let modifiers = if use_shift {
+            &["ctrl", "shift"][..]
+        } else {
+            &["ctrl"][..]
+        };
+        self.send_shortcut(modifiers, "v", Some("active")).await
+    }
+
+    async fn send_shortcut(
+        &self,
+        modifiers: &[&str],
+        key: &str,
+        target: Option<&str>,
+    ) -> Result<()> {
+        let mods_segment = if modifiers.is_empty() {
+            String::new()
+        } else {
+            modifiers.join(" ")
+        };
+        let target_segment = target.map(|t| format!(", {t}")).unwrap_or_default();
+        let command = if mods_segment.is_empty() {
+            format!("dispatch sendshortcut {key}{target_segment}")
+        } else {
+            format!("dispatch sendshortcut {mods_segment}, {key}{target_segment}")
+        };
+        let response = self.send_command(&command).await?;
+        if response.is_empty() || response.eq_ignore_ascii_case("ok") {
+            Ok(())
+        } else {
+            Err(anyhow!("Hyprland sendshortcut error: {response}"))
+        }
+    }
+
+    async fn active_window_class(&self) -> Result<Option<String>> {
+        const COMMANDS: &[(&str, &str)] =
+            &[("activewindow", "plain"), ("j/activewindow", "legacy-json")];
+
+        for (command, label) in COMMANDS {
+            let response = self.send_command(command).await?;
+            let trimmed = response.trim();
+
+            if trimmed.is_empty() {
+                debug!(command, "Hyprland activewindow returned empty string");
+                return Ok(None);
+            }
+
+            if trimmed.eq_ignore_ascii_case("unknown request") {
+                debug!(
+                    command,
+                    "Hyprland does not recognize activewindow request variant ({label})"
+                );
+                continue;
+            }
+
+            match Self::extract_window_class_from_response(trimmed) {
+                Ok(class) => return Ok(class),
+                Err(err) => {
+                    debug!(
+                        command,
+                        response, "Hyprland activewindow parse failed via {label}: {err}"
+                    );
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn send_command(&self, command: &str) -> Result<String> {
+        let mut stream = UnixStream::connect(&self.socket_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to Hyprland socket at {}",
+                    self.socket_path.display()
+                )
+            })?;
+
+        let mut message = command.as_bytes().to_vec();
+        message.push(b'\n');
+        stream
+            .write_all(&message)
+            .await
+            .with_context(|| format!("Failed to send IPC command: {command}"))?;
+        stream
+            .flush()
+            .await
+            .context("Failed to flush Hyprland IPC command")?;
+
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .await
+            .context("Failed to read Hyprland IPC response")?;
+        let text = String::from_utf8_lossy(&response).trim().to_string();
+        debug!(
+            command,
+            response = text.as_str(),
+            "Hyprland IPC response (trimmed)"
+        );
+        Ok(text)
+    }
+
+    fn extract_window_class_from_response(response: &str) -> Result<Option<String>> {
+        if response.is_empty() {
+            return Ok(None);
+        }
+
+        if let Ok(value) = serde_json::from_str::<Value>(response) {
+            return Ok(value
+                .get("class")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()));
+        }
+
+        for line in response.lines() {
+            if let Some((key, value)) = line.trim().split_once(':') {
+                if key.trim().eq_ignore_ascii_case("class") {
+                    return Ok(Some(value.trim().to_string()));
+                }
+            }
+        }
+
+        Err(anyhow!("No class entry found in Hyprland response"))
+    }
+}
 
 #[derive(Clone, Copy)]
 struct SpeechReplacement {
@@ -490,14 +666,18 @@ pub struct TextInjector {
     enigo: Enigo,
     clipboard: Clipboard,
     word_overrides: HashMap<String, String>,
-    auto_copy_clipboard: bool,
+    hyprland_dispatcher: Option<HyprlandDispatcher>,
+    wrtype_client: Option<WrtypeClient>,
+    wrtype_attempted: bool,
+    wayland_env: bool,
+    wayland_clipboard_enabled: bool,
 }
 
 impl TextInjector {
     pub fn new(
         _shift_paste: bool,
         word_overrides: HashMap<String, String>,
-        auto_copy_clipboard: bool,
+        _auto_copy_clipboard: bool,
     ) -> Result<Self> {
         let enigo = Enigo::new(&Settings::default())
             .context("Failed to initialize Enigo for text injection")?;
@@ -505,12 +685,24 @@ impl TextInjector {
         let clipboard = Clipboard::new().context("Failed to initialize clipboard")?;
 
         let sanitized_overrides = sanitize_word_overrides(word_overrides);
+        let wayland_env = env::var("WAYLAND_DISPLAY").is_ok();
+        let hyprland_dispatcher = HyprlandDispatcher::new();
+
+        if hyprland_dispatcher.is_some() {
+            debug!("Hyprland IPC detected; enabling sendshortcut paste integration");
+        } else if wayland_env {
+            debug!("Wayland session detected without Hyprland IPC; virtual keyboard fallback will be used");
+        }
 
         Ok(Self {
             enigo,
             clipboard,
             word_overrides: sanitized_overrides,
-            auto_copy_clipboard,
+            hyprland_dispatcher,
+            wrtype_client: None,
+            wrtype_attempted: false,
+            wayland_env,
+            wayland_clipboard_enabled: wayland_env,
         })
     }
 
@@ -525,31 +717,148 @@ impl TextInjector {
 
         info!("Injecting text: {} characters", processed.len());
 
-        // Copy to clipboard - required for paste injection method
-        self.clipboard.set_text(&processed)
-            .context("Failed to copy text to clipboard")?;
-        debug!("Text copied to clipboard");
+        // Copy to clipboard using available backends
+        self.copy_processed_text(&processed)?;
 
         // Small delay to ensure window focus is ready for input (especially on Wayland/XWayland)
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // Use Ctrl+Shift+V to paste from clipboard (works in terminals and GUI apps)
-        debug!("Injecting text via Ctrl+Shift+V paste...");
+        let mut shift_hint = None;
+
+        if let Some(dispatcher) = self.hyprland_dispatcher.as_ref() {
+            match dispatcher.active_window_class().await {
+                Ok(class_opt) => {
+                    if let Some(class) = class_opt {
+                        let needs_shift = needs_shift_for_class(&class);
+                        debug!(
+                            class = class.as_str(),
+                            needs_shift, "Hyprland active window classification"
+                        );
+                        shift_hint = Some(needs_shift);
+                    }
+                }
+                Err(err) => {
+                    warn!("Failed to query Hyprland active window class: {err:?}");
+                }
+            }
+
+            let use_shift = shift_hint.unwrap_or(true);
+            debug!(use_shift, "Hyprland sendshortcut paste attempt");
+
+            match dispatcher.send_paste_shortcut(use_shift).await {
+                Ok(_) => {
+                    info!("✅ Text injected via Hyprland sendshortcut");
+                    return Ok(());
+                }
+                Err(err) => {
+                    warn!("Hyprland sendshortcut paste failed: {err:?}");
+                }
+            }
+        }
+
+        if let Some(client) = self.ensure_wrtype_client() {
+            let use_shift = shift_hint.unwrap_or(false);
+            match send_virtual_keyboard_paste(client, use_shift) {
+                Ok(_) => {
+                    info!("✅ Text injected via Wayland virtual keyboard");
+                    return Ok(());
+                }
+                Err(err) => {
+                    warn!("Wayland virtual keyboard paste failed: {err:?}");
+                    self.invalidate_wrtype_client();
+                }
+            }
+        }
+
+        debug!("Falling back to Ctrl+Shift+V paste via Enigo");
+        self.inject_via_enigo_shift_paste()
+    }
+
+    fn copy_processed_text(&mut self, text: &str) -> Result<()> {
+        if self.wayland_clipboard_enabled {
+            match self.copy_wayland_clipboard(text) {
+                Ok(_) => {
+                    debug!("Text copied to Wayland clipboard");
+                }
+                Err(err) => {
+                    warn!("Wayland clipboard copy failed (falling back to arboard): {err:?}");
+                    self.wayland_clipboard_enabled = false;
+                }
+            }
+        }
+
+        self.clipboard
+            .set_text(text)
+            .context("Failed to copy text to clipboard")?;
+        debug!("Text copied to clipboard");
+        Ok(())
+    }
+
+    fn copy_wayland_clipboard(&self, text: &str) -> Result<(), WlCopyError> {
+        let bytes = text.as_bytes().to_vec();
+
+        let mut both = Options::new();
+        both.clipboard(ClipboardType::Both);
+        match both.copy(
+            Source::Bytes(bytes.clone().into_boxed_slice()),
+            MimeType::Text,
+        ) {
+            Ok(_) => Ok(()),
+            Err(WlCopyError::PrimarySelectionUnsupported) => {
+                let mut regular = Options::new();
+                regular.clipboard(ClipboardType::Regular);
+                regular.copy(Source::Bytes(bytes.into_boxed_slice()), MimeType::Text)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn ensure_wrtype_client(&mut self) -> Option<&mut WrtypeClient> {
+        if !self.wayland_env {
+            return None;
+        }
+
+        if self.wrtype_client.is_none() && !self.wrtype_attempted {
+            self.wrtype_attempted = true;
+            match WrtypeClient::new() {
+                Ok(client) => {
+                    debug!("Initialized Wayland virtual keyboard client");
+                    self.wrtype_client = Some(client);
+                }
+                Err(err) => {
+                    warn!("Failed to initialize Wayland virtual keyboard client: {err:?}");
+                }
+            }
+        }
+
+        self.wrtype_client.as_mut()
+    }
+
+    fn invalidate_wrtype_client(&mut self) {
+        self.wrtype_client = None;
+        self.wrtype_attempted = false;
+    }
+
+    fn inject_via_enigo_shift_paste(&mut self) -> Result<()> {
         use enigo::{Direction, Key};
-        
-        // Press Ctrl+Shift+V
-        self.enigo.key(Key::Control, Direction::Press)
+
+        self.enigo
+            .key(Key::Control, Direction::Press)
             .context("Failed to press Ctrl")?;
-        self.enigo.key(Key::Shift, Direction::Press)
+        self.enigo
+            .key(Key::Shift, Direction::Press)
             .context("Failed to press Shift")?;
-        self.enigo.key(Key::Unicode('v'), Direction::Click)
+        self.enigo
+            .key(Key::Unicode('v'), Direction::Click)
             .context("Failed to press V")?;
-        self.enigo.key(Key::Shift, Direction::Release)
+        self.enigo
+            .key(Key::Shift, Direction::Release)
             .context("Failed to release Shift")?;
-        self.enigo.key(Key::Control, Direction::Release)
+        self.enigo
+            .key(Key::Control, Direction::Release)
             .context("Failed to release Ctrl")?;
 
-        info!("✅ Text injected successfully via paste");
+        info!("✅ Text injected via Enigo fallback paste");
         Ok(())
     }
 
@@ -734,6 +1043,20 @@ impl TextInjector {
         // Built-in speech-to-text replacements
         apply_speech_replacements(text)
     }
+}
+
+fn send_virtual_keyboard_paste(client: &mut WrtypeClient, use_shift: bool) -> Result<()> {
+    if use_shift {
+        client.send_shortcut(&[Modifier::Ctrl, Modifier::Shift], "v")
+    } else {
+        client.send_shortcut(&[Modifier::Ctrl], "v")
+    }
+}
+
+fn needs_shift_for_class(class: &str) -> bool {
+    SHIFT_PASTE_CLASSES
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(class))
 }
 
 fn normalize_line_breaks(input: &str) -> String {
@@ -925,5 +1248,23 @@ mod tests {
         let sanitized = sanitize_word_overrides(overrides);
         assert!(!sanitized.contains_key("em dash"));
         assert_eq!(sanitized.get("under score").unwrap(), "_");
+    }
+
+    #[test]
+    fn extracts_class_from_plain_hyprland_output() {
+        let sample = r#"
+Address: 0x123456
+Class: kitty
+Title: sample
+"#;
+        let class = super::HyprlandDispatcher::extract_window_class_from_response(sample).unwrap();
+        assert_eq!(class, Some("kitty".to_string()));
+    }
+
+    #[test]
+    fn extracts_class_from_json_hyprland_output() {
+        let sample = r#"{"address":"0x123","class":"foot","title":"shell"}"#;
+        let class = super::HyprlandDispatcher::extract_window_class_from_response(sample).unwrap();
+        assert_eq!(class, Some("foot".to_string()));
     }
 }
