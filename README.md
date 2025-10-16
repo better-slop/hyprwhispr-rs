@@ -9,6 +9,12 @@
 
 - whisper.cpp ([GitHub](https://github.com/ggml-org/whisper.cpp), [AUR](https://aur.archlinux.org/packages/whisper.cpp))
 
+# Hyprland Integration
+
+- Detects Hyprland via `HYPRLAND_INSTANCE_SIGNATURE` and opens the IPC socket at `$XDG_RUNTIME_DIR/hypr/<signature>/.socket.sock`.
+- Issues `dispatch sendshortcut` commands against the active window to paste dictated text, inspecting `activewindow` to decide when `Shift` is required for terminal emulators.
+- Falls back to a Wayland virtual keyboard client or a simulated keypress paste if IPC communication fails, ensuring dictation still completes.
+
 # Development
 
 1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`
