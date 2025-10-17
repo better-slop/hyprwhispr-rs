@@ -30,6 +30,84 @@ impl Default for ShortcutsConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechProviderKind {
+    Groq,
+    Gemini,
+}
+
+impl Default for SpeechProviderKind {
+    fn default() -> Self {
+        SpeechProviderKind::Groq
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct GroqConfig {
+    pub api_key: Option<String>,
+    pub endpoint: String,
+    pub model: String,
+}
+
+impl Default for GroqConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            // Groq mirrors OpenAI's audio REST shape; this endpoint keeps latency low
+            // while letting us reuse multipart tooling.
+            endpoint: "https://api.groq.com/openai/v1/audio/transcriptions".to_string(),
+            // Groq's whisper-large-v3-turbo is tuned for fast, high quality dictation.
+            model: "whisper-large-v3-turbo".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct GeminiConfig {
+    pub api_key: Option<String>,
+    pub endpoint: String,
+    pub model: String,
+}
+
+impl Default for GeminiConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            // Gemini's v1beta endpoint unlocks 2.5 Pro Flash multimodal transcription.
+            endpoint: "https://generativelanguage.googleapis.com/v1beta".to_string(),
+            // 2.5 Pro Flash balances accuracy with latency ceilings suitable for live dictation.
+            model: "models/gemini-2.5-pro-flash".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TranscriptionConfig {
+    pub provider: SpeechProviderKind,
+    pub groq: GroqConfig,
+    pub gemini: GeminiConfig,
+    pub request_timeout_secs: u64,
+    pub max_retries: u32,
+    pub retry_backoff_ms: u64,
+}
+
+impl Default for TranscriptionConfig {
+    fn default() -> Self {
+        Self {
+            provider: SpeechProviderKind::default(),
+            groq: GroqConfig::default(),
+            gemini: GeminiConfig::default(),
+            request_timeout_secs: 45,
+            max_retries: 2,
+            retry_backoff_ms: 500,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     #[serde(default = "default_primary_shortcut", skip_serializing)]
@@ -88,6 +166,9 @@ pub struct Config {
 
     #[serde(default)]
     pub models_dirs: Vec<String>,
+
+    #[serde(default)]
+    pub transcription: TranscriptionConfig,
 }
 
 fn default_gpu_layers() -> i32 {

@@ -23,6 +23,11 @@ thiserror = "1"
 # Audio
 cpal = "0.15"
 rodio = "0.17"
+flacenc = { version = "0.5", default-features = false }
+
+# Encoding helpers
+base64 = "0.21"
+bytes = "1"
 
 # Input
 evdev = "0.12"
@@ -38,6 +43,9 @@ whisper-rs = { version = "0.12", optional = true }
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Networking
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 
 # Paths & filesystem
 directories = "5"
