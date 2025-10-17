@@ -4,6 +4,7 @@ pub mod audio;
 pub mod config;
 pub mod input;
 pub mod logging;
+pub mod speech;
 pub mod status;
 pub mod whisper;
 

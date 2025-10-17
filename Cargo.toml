@@ -20,6 +20,15 @@ jsonc-parser = { version = "0.26.3", features = ["serde"] }
 anyhow = "1"
 thiserror = "1"
 
+# HTTP
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+
+# Async helpers
+bytes = "1"
+
+# Encoding
+base64 = "0.22"
+
 # Audio
 cpal = "0.15"
 rodio = "0.17"

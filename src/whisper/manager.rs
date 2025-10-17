@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use tracing::{debug, info, trace, warn};
 
+use crate::speech::RemoteSpeechProvider;
+
 const NON_SPEECH_MARKERS: &[&str] = &["BLANK_AUDIO", "INAUDIBLE", "NO_SPEECH", "SILENCE"];
 
 #[derive(Debug, Clone)]
@@ -47,6 +49,7 @@ pub struct WhisperManager {
     gpu_layers: i32,
     vad: WhisperVadOptions,
     no_speech_threshold: f32,
+    remote_provider: Option<RemoteSpeechProvider>,
 }
 
 impl WhisperManager {
@@ -60,6 +63,10 @@ impl WhisperManager {
         vad: WhisperVadOptions,
         no_speech_threshold: f32,
     ) -> Result<Self> {
+        let remote_provider = RemoteSpeechProvider::from_environment().map_err(|err| {
+            anyhow::anyhow!("failed to configure remote speech provider: {}", err)
+        })?;
+
         Ok(Self {
             model_path,
             binary_path,
@@ -69,45 +76,50 @@ impl WhisperManager {
             gpu_layers,
             vad,
             no_speech_threshold,
+            remote_provider,
         })
     }
 
     pub fn initialize(&self) -> Result<()> {
-        if !self.model_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Whisper model not found at: {:?}",
-                self.model_path
-            ));
-        }
+        let local_available = self.local_whisper_available();
 
-        if !self.binary_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Whisper binary not found at: {:?}",
-                self.binary_path
-            ));
-        }
-
-        // Detect GPU support
-        let gpu_info = Self::detect_gpu();
-
-        info!("✅ Whisper initialized");
-        info!("   Model: {:?}", self.model_path);
-        info!("   Binary: {:?}", self.binary_path);
-        info!("   GPU: {}", gpu_info);
-        if self.gpu_layers > 0 {
-            info!("   GPU: enabled (AUR version uses GPU by default)");
-        } else {
-            info!("   GPU: disabled (CPU only)");
-        }
-
-        if self.vad.enabled {
-            if let Some(path) = &self.vad.model_path {
-                info!("   VAD: enabled ({})", path.display());
+        if !local_available {
+            if self.remote_provider.is_some() {
+                warn!("Whisper CLI assets missing; remote providers will handle transcription");
             } else {
-                warn!("   VAD: enabled but model file not found (will run without VAD)");
+                return Err(anyhow::anyhow!(
+                    "Whisper model not found at: {:?} or binary missing at: {:?}",
+                    self.model_path,
+                    self.binary_path
+                ));
+            }
+        }
+
+        if local_available {
+            // Detect GPU support
+            let gpu_info = Self::detect_gpu();
+
+            info!("✅ Whisper initialized");
+            info!("   Model: {:?}", self.model_path);
+            info!("   Binary: {:?}", self.binary_path);
+            info!("   GPU: {}", gpu_info);
+            if self.gpu_layers > 0 {
+                info!("   GPU: enabled (AUR version uses GPU by default)");
+            } else {
+                info!("   GPU: disabled (CPU only)");
+            }
+
+            if self.vad.enabled {
+                if let Some(path) = &self.vad.model_path {
+                    info!("   VAD: enabled ({})", path.display());
+                } else {
+                    warn!("   VAD: enabled but model file not found (will run without VAD)");
+                }
+            } else {
+                info!("   VAD: disabled");
             }
         } else {
-            info!("   VAD: disabled");
+            info!("✅ Remote speech-to-text active; local Whisper CLI disabled");
         }
 
         Ok(())
@@ -142,6 +154,29 @@ impl WhisperManager {
         let duration_secs = audio_data.len() as f32 / 16000.0;
         info!("🧠 Transcribing {:.2}s of audio...", duration_secs);
 
+        if let Some(remote) = &self.remote_provider {
+            match remote
+                .transcribe(&audio_data, Some(&self.whisper_prompt))
+                .await
+            {
+                Ok(transcription) => {
+                    return Ok(self.finalize_transcription(transcription));
+                }
+                Err(err) => {
+                    warn!(
+                        "Remote transcription failed ({}); attempting Whisper CLI fallback",
+                        err
+                    );
+                    if !self.local_whisper_available() {
+                        return Err(anyhow::anyhow!(
+                            "Remote transcription failed and local Whisper CLI is unavailable: {}",
+                            err
+                        ));
+                    }
+                }
+            }
+        }
+
         // Save audio to temporary WAV file
         let temp_wav = self
             .temp_dir
@@ -152,21 +187,26 @@ impl WhisperManager {
 
         // Run whisper.cpp CLI
         let transcription = self.run_whisper_cli(&temp_wav).await?;
-        let cleaned_transcription = self.strip_prompt_artifacts(&transcription);
 
         // Always clean up after successful transcription pass
         let _ = fs::remove_file(&temp_wav);
 
+        Ok(self.finalize_transcription(transcription))
+    }
+
+    fn finalize_transcription(&self, transcription: String) -> String {
+        let cleaned_transcription = self.strip_prompt_artifacts(&transcription);
+
         if Self::contains_only_non_speech_markers(&cleaned_transcription) {
             debug!(
-                "Whisper produced only non-speech markers: {}",
+                "Transcription produced only non-speech markers: {}",
                 cleaned_transcription
             );
-            return Ok(String::new());
+            return String::new();
         }
 
         if cleaned_transcription.trim().is_empty() {
-            warn!("Whisper returned empty transcription");
+            warn!("Transcription result was empty");
         } else {
             if cleaned_transcription != transcription {
                 debug!(
@@ -177,7 +217,11 @@ impl WhisperManager {
             info!("✅ Transcription: {}", cleaned_transcription);
         }
 
-        Ok(cleaned_transcription)
+        cleaned_transcription
+    }
+
+    fn local_whisper_available(&self) -> bool {
+        self.model_path.exists() && self.binary_path.exists()
     }
 
     fn save_audio_as_wav(&self, audio_data: &[f32], path: &PathBuf) -> Result<()> {
