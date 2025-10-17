@@ -130,7 +130,7 @@ impl GroqTranscriber {
             form = form.text("prompt", self.prompt.clone());
         }
 
-        let file_part = multipart::Part::bytes(audio.data.clone())
+        let file_part = multipart::Part::stream(audio.data.clone())
             .file_name("audio.flac")
             .mime_str(audio.content_type)
             .context("Failed to set Groq audio content type")?;
