@@ -18,11 +18,13 @@ jsonc-parser = { version = "0.26.3", features = ["serde"] }
 
 # Error handling
 anyhow = "1"
+async-trait = "0.1"
 thiserror = "1"
 
 # Audio
 cpal = "0.15"
 rodio = "0.17"
+hound = "3"
 
 # Input
 evdev = "0.12"
@@ -34,6 +36,9 @@ wrtype = "0.1"
 
 # Whisper (we'll try whisper-rs, but have subprocess fallback)
 whisper-rs = { version = "0.12", optional = true }
+
+# Networking
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"] }
 
 # Logging
 tracing = "0.1"

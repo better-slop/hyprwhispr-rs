@@ -1,5 +1,9 @@
-use anyhow::Result;
-use hyprwhspr_rs::{logging::TextPipelineFormatter, ConfigManager, HyprwhsprApp};
+use anyhow::{Context, Result};
+use hyprwhspr_rs::{
+    logging::TextPipelineFormatter,
+    whisper::{GroqClient, LocalWhisper, Transcriber},
+    BackendKind, Config, ConfigManager, HyprwhsprApp,
+};
 use std::env;
 use tokio::signal;
 use tracing::info;
@@ -18,10 +22,11 @@ async fn main() -> Result<()> {
 
     // Check for test mode
     let args: Vec<String> = env::args().collect();
-    let test_mode = args.contains(&"--test".to_string());
+    let test_mode = args.iter().any(|arg| arg == "--test");
+    let cli_groq = args.iter().any(|arg| arg == "--groq");
 
     if test_mode {
-        return run_test_mode().await;
+        return run_test_mode(cli_groq).await;
     }
 
     info!("🚀 hyprwhspr-rs starting up!");
@@ -46,7 +51,21 @@ async fn main() -> Result<()> {
     info!("   Audio feedback: {}", config.audio_feedback);
 
     // Initialize application
-    let app = HyprwhsprApp::new(config_manager)?;
+    let backend_override = cli_groq;
+    let backend_kind = if backend_override || config.use_groq {
+        BackendKind::Groq
+    } else {
+        BackendKind::Local
+    };
+
+    if backend_override {
+        info!("CLI flag --groq provided; using Groq backend");
+    }
+
+    let transcriber = make_transcriber(&config_manager, &config, backend_kind)
+        .context("Failed to initialize transcription backend")?;
+
+    let app = HyprwhsprApp::new(config_manager, transcriber, backend_kind, backend_override)?;
 
     // Set up signal handling
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -99,7 +118,37 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_test_mode() -> Result<()> {
+fn make_transcriber(
+    config_manager: &ConfigManager,
+    config: &Config,
+    backend_kind: BackendKind,
+) -> Result<Box<dyn Transcriber>> {
+    match backend_kind {
+        BackendKind::Local => {
+            let vad_options = config_manager.build_vad_options(config);
+            let local = LocalWhisper::new(
+                config_manager.get_model_path(),
+                config_manager.get_whisper_binary_path(),
+                config.threads,
+                config.whisper_prompt.clone(),
+                config_manager.get_temp_dir(),
+                config.gpu_layers,
+                vad_options,
+                config.no_speech_threshold,
+            )?;
+            local.initialize()?;
+            info!("Backend: LocalWhisper");
+            Ok(Box::new(local))
+        }
+        BackendKind::Groq => {
+            let client = GroqClient::new().context("Failed to initialize Groq client")?;
+            info!("Backend: Groq (model=whisper-large-v3)");
+            Ok(Box::new(client))
+        }
+    }
+}
+
+async fn run_test_mode(cli_groq: bool) -> Result<()> {
     use hyprwhspr_rs::app_test::HyprwhsprAppTest;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -115,8 +164,23 @@ async fn run_test_mode() -> Result<()> {
     info!("   Model: {}", config.model);
     info!("   Audio feedback: {}", config.audio_feedback);
 
+    let backend_override = cli_groq;
+    let backend_kind = if backend_override || config.use_groq {
+        BackendKind::Groq
+    } else {
+        BackendKind::Local
+    };
+
+    if backend_override {
+        info!("CLI flag --groq provided; using Groq backend");
+    }
+
+    let transcriber = make_transcriber(&config_manager, &config, backend_kind)
+        .context("Failed to initialize transcription backend")?;
+
     // Initialize application
-    let mut app = HyprwhsprAppTest::new(config_manager)?;
+    let mut app =
+        HyprwhsprAppTest::new(config_manager, transcriber, backend_kind, backend_override)?;
 
     info!("");
     info!("📝 Instructions:");

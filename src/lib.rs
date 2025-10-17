@@ -7,6 +7,6 @@ pub mod logging;
 pub mod status;
 pub mod whisper;
 
-pub use app::HyprwhsprApp;
+pub use app::{BackendKind, HyprwhsprApp};
 pub use config::{Config, ConfigManager};
 pub use status::StatusWriter;

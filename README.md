@@ -76,6 +76,20 @@
 }
 ```
 
+## Groq speech-to-text backend
+
+The local whisper.cpp backend remains the default. To use Groq's hosted Whisper Large v3 implementation instead:
+
+1. Set the required API key: `export GROQ_API_KEY=your_key_here`.
+2. Either set `"use_groq": true` in your `config.jsonc` **or** launch the binary with `--groq` to force the Groq backend (the CLI flag takes precedence over config).
+3. Run the application, for example:
+
+```bash
+GROQ_API_KEY=... ./target/release/hyprwhspr-rs --groq
+```
+
+The Groq client uploads recordings as WAV via `response_format=json` and reads the `text` field from the response. Both backends return plain `String` transcripts, so downstream behavior is unchanged.
+
 # Development
 
 1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`

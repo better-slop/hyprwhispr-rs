@@ -11,6 +11,8 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::watch;
 use tokio::time;
 
+use crate::whisper::WhisperVadOptions;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ShortcutsConfig {
@@ -55,6 +57,9 @@ pub struct Config {
 
     #[serde(default)]
     pub audio_feedback: bool,
+
+    #[serde(default)]
+    pub use_groq: bool,
 
     #[serde(default = "default_volume")]
     pub start_sound_volume: f32,
@@ -193,6 +198,7 @@ impl Default for Config {
             word_overrides: HashMap::new(),
             whisper_prompt: default_whisper_prompt(),
             audio_feedback: false,
+            use_groq: false,
             start_sound_volume: default_volume(),
             stop_sound_volume: default_volume(),
             start_sound_path: None,
@@ -396,6 +402,19 @@ impl ConfigManager {
     pub fn get_model_path(&self) -> PathBuf {
         let config = self.get();
         Self::resolve_model_path(&config)
+    }
+
+    pub fn build_vad_options(&self, config: &Config) -> WhisperVadOptions {
+        WhisperVadOptions {
+            enabled: config.vad.enabled,
+            model_path: self.get_vad_model_path(config),
+            threshold: config.vad.threshold,
+            min_speech_ms: config.vad.min_speech_ms,
+            min_silence_ms: config.vad.min_silence_ms,
+            max_speech_s: config.vad.max_speech_s,
+            speech_pad_ms: config.vad.speech_pad_ms,
+            samples_overlap: config.vad.samples_overlap,
+        }
     }
 
     pub fn get_vad_model_path(&self, config: &Config) -> Option<PathBuf> {

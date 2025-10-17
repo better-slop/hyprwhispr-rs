@@ -11,7 +11,7 @@ use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
 use crate::config::{Config, ConfigManager, ShortcutsConfig};
 use crate::input::{GlobalShortcuts, ShortcutEvent, ShortcutKind, ShortcutPhase, TextInjector};
 use crate::status::StatusWriter;
-use crate::whisper::{WhisperManager, WhisperVadOptions};
+use crate::whisper::{GroqClient, LocalWhisper, Transcriber};
 
 struct ShortcutListener {
     stop_flag: Arc<AtomicBool>,
@@ -87,24 +87,19 @@ enum RecordingTrigger {
     PressShortcut,
 }
 
-fn build_vad_options(config_manager: &ConfigManager, config: &Config) -> WhisperVadOptions {
-    WhisperVadOptions {
-        enabled: config.vad.enabled,
-        model_path: config_manager.get_vad_model_path(config),
-        threshold: config.vad.threshold,
-        min_speech_ms: config.vad.min_speech_ms,
-        min_silence_ms: config.vad.min_silence_ms,
-        max_speech_s: config.vad.max_speech_s,
-        speech_pad_ms: config.vad.speech_pad_ms,
-        samples_overlap: config.vad.samples_overlap,
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendKind {
+    Local,
+    Groq,
 }
 
 pub struct HyprwhsprApp {
     config_manager: ConfigManager,
     audio_capture: AudioCapture,
     audio_feedback: AudioFeedback,
-    whisper_manager: WhisperManager,
+    transcriber: Box<dyn Transcriber>,
+    backend_kind: BackendKind,
+    backend_override: bool,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
     shortcut_tx: mpsc::Sender<ShortcutEvent>,
@@ -118,7 +113,12 @@ pub struct HyprwhsprApp {
 }
 
 impl HyprwhsprApp {
-    pub fn new(config_manager: ConfigManager) -> Result<Self> {
+    pub fn new(
+        config_manager: ConfigManager,
+        transcriber: Box<dyn Transcriber>,
+        backend_kind: BackendKind,
+        backend_override: bool,
+    ) -> Result<Self> {
         let config = config_manager.get();
 
         let audio_capture = AudioCapture::new().context("Failed to initialize audio capture")?;
@@ -132,23 +132,6 @@ impl HyprwhsprApp {
             config.start_sound_volume,
             config.stop_sound_volume,
         );
-
-        let vad_options = build_vad_options(&config_manager, &config);
-
-        let whisper_manager = WhisperManager::new(
-            config_manager.get_model_path(),
-            config_manager.get_whisper_binary_path(),
-            config.threads,
-            config.whisper_prompt.clone(),
-            config_manager.get_temp_dir(),
-            config.gpu_layers,
-            vad_options,
-            config.no_speech_threshold,
-        )?;
-
-        whisper_manager
-            .initialize()
-            .context("Failed to initialize Whisper")?;
 
         let text_injector = TextInjector::new(
             config.shift_paste,
@@ -165,7 +148,9 @@ impl HyprwhsprApp {
             config_manager,
             audio_capture,
             audio_feedback,
-            whisper_manager,
+            transcriber,
+            backend_kind,
+            backend_override,
             text_injector: Arc::new(Mutex::new(text_injector)),
             status_writer,
             shortcut_tx,
@@ -289,28 +274,27 @@ impl HyprwhsprApp {
             new_config.auto_copy_clipboard,
         )?;
 
-        let whisper_changed = self.current_config.model != new_config.model
-            || self.current_config.whisper_prompt != new_config.whisper_prompt
-            || self.current_config.threads != new_config.threads
-            || self.current_config.gpu_layers != new_config.gpu_layers
-            || self.current_config.vad != new_config.vad
-            || (self.current_config.no_speech_threshold - new_config.no_speech_threshold).abs()
-                > f32::EPSILON;
+        let desired_backend = if new_config.use_groq {
+            BackendKind::Groq
+        } else {
+            BackendKind::Local
+        };
 
-        if whisper_changed {
-            let vad_options = build_vad_options(&self.config_manager, &new_config);
-            let manager = WhisperManager::new(
-                self.config_manager.get_model_path(),
-                self.config_manager.get_whisper_binary_path(),
-                new_config.threads,
-                new_config.whisper_prompt.clone(),
-                self.config_manager.get_temp_dir(),
-                new_config.gpu_layers,
-                vad_options,
-                new_config.no_speech_threshold,
-            )?;
-            manager.initialize()?;
-            self.whisper_manager = manager;
+        if !self.backend_override && desired_backend != self.backend_kind {
+            self.switch_transcriber(desired_backend, &new_config)?;
+        } else if matches!(self.backend_kind, BackendKind::Local) {
+            let whisper_changed = self.current_config.model != new_config.model
+                || self.current_config.whisper_prompt != new_config.whisper_prompt
+                || self.current_config.threads != new_config.threads
+                || self.current_config.gpu_layers != new_config.gpu_layers
+                || self.current_config.vad != new_config.vad
+                || (self.current_config.no_speech_threshold - new_config.no_speech_threshold).abs()
+                    > f32::EPSILON;
+
+            if whisper_changed {
+                let local = self.build_local_transcriber(&new_config)?;
+                self.transcriber = Box::new(local);
+            }
         }
 
         let shortcuts_changed = new_config.shortcuts != self.current_config.shortcuts
@@ -341,6 +325,40 @@ impl HyprwhsprApp {
             Some(value) => info!("Hold shortcut active: {}", value),
             None => info!("Hold shortcut disabled"),
         }
+    }
+
+    fn build_local_transcriber(&self, config: &Config) -> Result<LocalWhisper> {
+        let vad_options = self.config_manager.build_vad_options(config);
+        let local = LocalWhisper::new(
+            self.config_manager.get_model_path(),
+            self.config_manager.get_whisper_binary_path(),
+            config.threads,
+            config.whisper_prompt.clone(),
+            self.config_manager.get_temp_dir(),
+            config.gpu_layers,
+            vad_options,
+            config.no_speech_threshold,
+        )?;
+        local.initialize()?;
+        Ok(local)
+    }
+
+    fn switch_transcriber(&mut self, backend: BackendKind, config: &Config) -> Result<()> {
+        match backend {
+            BackendKind::Local => {
+                let local = self.build_local_transcriber(config)?;
+                self.transcriber = Box::new(local);
+                info!("Backend switched to LocalWhisper");
+            }
+            BackendKind::Groq => {
+                let groq = GroqClient::new().context("Failed to initialize Groq backend")?;
+                self.transcriber = Box::new(groq);
+                info!("Backend switched to Groq (model=whisper-large-v3)");
+            }
+        }
+
+        self.backend_kind = backend;
+        Ok(())
     }
 
     async fn handle_shortcut(&mut self, event: ShortcutEvent) -> Result<()> {
@@ -420,7 +438,8 @@ impl HyprwhsprApp {
 
         if !audio_data.is_empty() {
             self.is_processing = true;
-            if let Err(e) = self.process_audio(audio_data).await {
+            let sample_rate_hz = self.audio_capture.sample_rate();
+            if let Err(e) = self.process_audio(audio_data, sample_rate_hz).await {
                 error!("❌ Error processing audio: {:#}", e);
                 // Show user-friendly error notification
                 warn!("Failed to process recording. Check logs for details.");
@@ -433,8 +452,11 @@ impl HyprwhsprApp {
         Ok(())
     }
 
-    async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
-        let transcription = self.whisper_manager.transcribe(audio_data).await?;
+    async fn process_audio(&mut self, audio_data: Vec<f32>, sample_rate_hz: u32) -> Result<()> {
+        let transcription = self
+            .transcriber
+            .transcribe(audio_data, sample_rate_hz)
+            .await?;
 
         if transcription.trim().is_empty() {
             warn!("Empty transcription, nothing to inject");
