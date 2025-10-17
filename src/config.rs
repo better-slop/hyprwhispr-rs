@@ -38,6 +38,9 @@ pub struct Config {
     #[serde(default)]
     pub shortcuts: ShortcutsConfig,
 
+    #[serde(default)]
+    pub stt_backend: SttBackend,
+
     #[serde(default = "default_model")]
     pub model: String,
 
@@ -187,6 +190,7 @@ impl Default for Config {
         let mut config = Self {
             primary_shortcut: default_primary_shortcut(),
             shortcuts: ShortcutsConfig::default(),
+            stt_backend: SttBackend::default(),
             model: default_model(),
             fallback_cli: false,
             threads: default_threads(),
@@ -207,6 +211,28 @@ impl Default for Config {
         };
         config.normalize_shortcuts();
         config
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SttBackend {
+    Local,
+    Groq,
+}
+
+impl Default for SttBackend {
+    fn default() -> Self {
+        SttBackend::Local
+    }
+}
+
+impl std::fmt::Display for SttBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SttBackend::Local => write!(f, "LocalWhisper"),
+            SttBackend::Groq => write!(f, "Groq"),
+        }
     }
 }
 

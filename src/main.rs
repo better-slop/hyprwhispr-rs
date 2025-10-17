@@ -1,5 +1,7 @@
 use anyhow::Result;
-use hyprwhspr_rs::{logging::TextPipelineFormatter, ConfigManager, HyprwhsprApp};
+use hyprwhspr_rs::{
+    config::SttBackend, logging::TextPipelineFormatter, ConfigManager, HyprwhsprApp,
+};
 use std::env;
 use tokio::signal;
 use tracing::info;
@@ -17,11 +19,10 @@ async fn main() -> Result<()> {
         .init();
 
     // Check for test mode
-    let args: Vec<String> = env::args().collect();
-    let test_mode = args.contains(&"--test".to_string());
+    let (test_mode, backend_override) = parse_cli_flags();
 
     if test_mode {
-        return run_test_mode().await;
+        return run_test_mode(backend_override).await;
     }
 
     info!("🚀 hyprwhspr-rs starting up!");
@@ -45,8 +46,15 @@ async fn main() -> Result<()> {
     }
     info!("   Audio feedback: {}", config.audio_feedback);
 
+    if let Some(override_backend) = backend_override {
+        info!("CLI backend override active: {}", override_backend);
+    }
+
+    let backend = backend_override.unwrap_or(config.stt_backend);
+    let transcriber = HyprwhsprApp::create_transcriber(&config_manager, &config, backend)?;
+
     // Initialize application
-    let app = HyprwhsprApp::new(config_manager)?;
+    let app = HyprwhsprApp::new(config_manager, transcriber, backend, backend_override)?;
 
     // Set up signal handling
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -99,7 +107,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_test_mode() -> Result<()> {
+async fn run_test_mode(backend_override: Option<SttBackend>) -> Result<()> {
     use hyprwhspr_rs::app_test::HyprwhsprAppTest;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -116,7 +124,7 @@ async fn run_test_mode() -> Result<()> {
     info!("   Audio feedback: {}", config.audio_feedback);
 
     // Initialize application
-    let mut app = HyprwhsprAppTest::new(config_manager)?;
+    let mut app = HyprwhsprAppTest::new(config_manager, backend_override)?;
 
     info!("");
     info!("📝 Instructions:");
@@ -184,4 +192,19 @@ async fn run_test_mode() -> Result<()> {
     info!("✅ Shutdown complete");
 
     Ok(())
+}
+
+fn parse_cli_flags() -> (bool, Option<SttBackend>) {
+    let mut test_mode = false;
+    let mut backend_override = None;
+
+    for arg in env::args().skip(1) {
+        match arg.as_str() {
+            "--test" => test_mode = true,
+            "--groq" => backend_override = Some(SttBackend::Groq),
+            _ => {}
+        }
+    }
+
+    (test_mode, backend_override)
 }

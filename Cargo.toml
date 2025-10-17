@@ -18,6 +18,7 @@ jsonc-parser = { version = "0.26.3", features = ["serde"] }
 
 # Error handling
 anyhow = "1"
+async-trait = "0.1"
 thiserror = "1"
 
 # Audio
@@ -47,6 +48,7 @@ regex = "1"
 similar = "2"
 owo-colors = { version = "4", features = ["supports-colors"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"] }
 
 [features]
 default = []

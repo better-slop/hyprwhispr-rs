@@ -8,10 +8,10 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
-use crate::config::{Config, ConfigManager, ShortcutsConfig};
+use crate::config::{Config, ConfigManager, ShortcutsConfig, SttBackend};
 use crate::input::{GlobalShortcuts, ShortcutEvent, ShortcutKind, ShortcutPhase, TextInjector};
 use crate::status::StatusWriter;
-use crate::whisper::{WhisperManager, WhisperVadOptions};
+use crate::whisper::{GroqClient, LocalWhisper, Transcriber, WhisperVadOptions};
 
 struct ShortcutListener {
     stop_flag: Arc<AtomicBool>,
@@ -104,7 +104,7 @@ pub struct HyprwhsprApp {
     config_manager: ConfigManager,
     audio_capture: AudioCapture,
     audio_feedback: AudioFeedback,
-    whisper_manager: WhisperManager,
+    transcriber: Box<dyn Transcriber>,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
     shortcut_tx: mpsc::Sender<ShortcutEvent>,
@@ -115,10 +115,17 @@ pub struct HyprwhsprApp {
     recording_session: Option<RecordingSession>,
     recording_trigger: Option<RecordingTrigger>,
     is_processing: bool,
+    backend: SttBackend,
+    backend_override: Option<SttBackend>,
 }
 
 impl HyprwhsprApp {
-    pub fn new(config_manager: ConfigManager) -> Result<Self> {
+    pub fn new(
+        config_manager: ConfigManager,
+        transcriber: Box<dyn Transcriber>,
+        backend: SttBackend,
+        backend_override: Option<SttBackend>,
+    ) -> Result<Self> {
         let config = config_manager.get();
 
         let audio_capture = AudioCapture::new().context("Failed to initialize audio capture")?;
@@ -132,23 +139,6 @@ impl HyprwhsprApp {
             config.start_sound_volume,
             config.stop_sound_volume,
         );
-
-        let vad_options = build_vad_options(&config_manager, &config);
-
-        let whisper_manager = WhisperManager::new(
-            config_manager.get_model_path(),
-            config_manager.get_whisper_binary_path(),
-            config.threads,
-            config.whisper_prompt.clone(),
-            config_manager.get_temp_dir(),
-            config.gpu_layers,
-            vad_options,
-            config.no_speech_threshold,
-        )?;
-
-        whisper_manager
-            .initialize()
-            .context("Failed to initialize Whisper")?;
 
         let text_injector = TextInjector::new(
             config.shift_paste,
@@ -165,7 +155,7 @@ impl HyprwhsprApp {
             config_manager,
             audio_capture,
             audio_feedback,
-            whisper_manager,
+            transcriber,
             text_injector: Arc::new(Mutex::new(text_injector)),
             status_writer,
             shortcut_tx,
@@ -176,7 +166,39 @@ impl HyprwhsprApp {
             recording_session: None,
             recording_trigger: None,
             is_processing: false,
+            backend,
+            backend_override,
         })
+    }
+
+    pub fn create_transcriber(
+        config_manager: &ConfigManager,
+        config: &Config,
+        backend: SttBackend,
+    ) -> Result<Box<dyn Transcriber>> {
+        match backend {
+            SttBackend::Local => {
+                let vad_options = build_vad_options(config_manager, config);
+                let local = LocalWhisper::new(
+                    config_manager.get_model_path(),
+                    config_manager.get_whisper_binary_path(),
+                    config.threads,
+                    config.whisper_prompt.clone(),
+                    config_manager.get_temp_dir(),
+                    config.gpu_layers,
+                    vad_options,
+                    config.no_speech_threshold,
+                )?;
+                local.initialize().context("Failed to initialize Whisper")?;
+                info!("Backend: LocalWhisper");
+                Ok(Box::new(local))
+            }
+            SttBackend::Groq => {
+                let client = GroqClient::new()?;
+                info!("Backend: Groq (model={})", client.model_name());
+                Ok(Box::new(client))
+            }
+        }
     }
 
     pub async fn run(mut self) -> Result<()> {
@@ -289,28 +311,25 @@ impl HyprwhsprApp {
             new_config.auto_copy_clipboard,
         )?;
 
-        let whisper_changed = self.current_config.model != new_config.model
-            || self.current_config.whisper_prompt != new_config.whisper_prompt
-            || self.current_config.threads != new_config.threads
-            || self.current_config.gpu_layers != new_config.gpu_layers
-            || self.current_config.vad != new_config.vad
-            || (self.current_config.no_speech_threshold - new_config.no_speech_threshold).abs()
-                > f32::EPSILON;
+        let desired_backend = self.backend_override.unwrap_or(new_config.stt_backend);
 
-        if whisper_changed {
-            let vad_options = build_vad_options(&self.config_manager, &new_config);
-            let manager = WhisperManager::new(
-                self.config_manager.get_model_path(),
-                self.config_manager.get_whisper_binary_path(),
-                new_config.threads,
-                new_config.whisper_prompt.clone(),
-                self.config_manager.get_temp_dir(),
-                new_config.gpu_layers,
-                vad_options,
-                new_config.no_speech_threshold,
-            )?;
-            manager.initialize()?;
-            self.whisper_manager = manager;
+        if desired_backend != self.backend {
+            self.transcriber =
+                Self::create_transcriber(&self.config_manager, &new_config, desired_backend)?;
+            self.backend = desired_backend;
+        } else if matches!(self.backend, SttBackend::Local) {
+            let whisper_changed = self.current_config.model != new_config.model
+                || self.current_config.whisper_prompt != new_config.whisper_prompt
+                || self.current_config.threads != new_config.threads
+                || self.current_config.gpu_layers != new_config.gpu_layers
+                || self.current_config.vad != new_config.vad
+                || (self.current_config.no_speech_threshold - new_config.no_speech_threshold).abs()
+                    > f32::EPSILON;
+
+            if whisper_changed {
+                self.transcriber =
+                    Self::create_transcriber(&self.config_manager, &new_config, desired_backend)?;
+            }
         }
 
         let shortcuts_changed = new_config.shortcuts != self.current_config.shortcuts
@@ -434,7 +453,10 @@ impl HyprwhsprApp {
     }
 
     async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
-        let transcription = self.whisper_manager.transcribe(audio_data).await?;
+        let transcription = self
+            .transcriber
+            .transcribe(audio_data, self.audio_capture.sample_rate())
+            .await?;
 
         if transcription.trim().is_empty() {
             warn!("Empty transcription, nothing to inject");

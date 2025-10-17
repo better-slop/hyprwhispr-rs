@@ -25,6 +25,7 @@
     "press": "SUPER+ALT+D",
     "hold": "SUPER+ALT+CTRL",
   },
+  "stt_backend": "local", // Speech-to-text backend: "local" (default) or "groq"
   "model": "large-v3-turbo-q8_0", // Whisper model to use (must exist in specified directories)
   "models_dirs": [
     "~/.config/hyprwhspr-rs/models"
@@ -75,6 +76,34 @@
   },
 }
 ```
+
+## Choosing a speech-to-text backend
+
+hyprwhspr-rs now supports pluggable transcription backends. The default is the local
+`whisper.cpp` integration (`stt_backend: "local"`). To use Groq's hosted Whisper service:
+
+1. Obtain an API key from [console.groq.com](https://console.groq.com/).
+2. Export it as `GROQ_API_KEY` in your environment.
+3. Start the application with either the CLI flag or a config override:
+
+   ```bash
+   GROQ_API_KEY=... ./target/release/hyprwhspr-rs --groq
+   ```
+
+   or set `"stt_backend": "groq"` in your config file. CLI flags take precedence over the
+   persisted configuration.
+
+The Groq backend submits audio as an in-memory WAV via
+`POST https://api.groq.com/openai/v1/audio/transcriptions` with `response_format=json` and
+reads the `text` field from the response. Both backends return the same transcription string
+to the rest of the application, so switching between them does not affect downstream behavior.
+
+### Feature parity
+
+- Local mode continues to support VAD, model selection, and GPU settings.
+- Groq mode currently uses the `whisper-large-v3` model by default.
+- Future enhancements (timeouts, retries, configurable model id, optional language hints, and
+  Groq telemetry) are tracked as TODOs in the source.
 
 # Development
 
