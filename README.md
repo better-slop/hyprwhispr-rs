@@ -30,6 +30,7 @@
     "~/.config/hyprwhspr-rs/models"
   ], // Directories to search for models
   "fallback_cli": false, // Fallback to whisper-cli (uses CPU)
+  "use_groq_backend": false, // Use Groq's Whisper API instead of the local binary (overridden by --groq)
   "threads": 4, // CPU threads to dedicate to transcription when using whisper-cli
   "word_overrides": {
     "under score": "_",
@@ -75,6 +76,27 @@
   },
 }
 ```
+
+# Selecting a transcription backend
+
+hyprwhspr-rs ships with two interchangeable speech-to-text backends:
+
+| Backend | How to enable | Notes |
+| --- | --- | --- |
+| `LocalWhisper` (default) | No extra flags | Uses your local `whisper.cpp` binary and models. |
+| `Groq` | `--groq` CLI flag **or** set `"use_groq_backend": true` in the config | Requires `GROQ_API_KEY` in the environment. CLI flags win when both are provided. |
+
+When the Groq backend is active we POST to `https://api.groq.com/openai/v1/audio/transcriptions` with `model=whisper-large-v3` and request `response_format=json`, reading the resulting `text` payload. Local mode writes the captured audio to a temporary WAV file and invokes `whisper.cpp` exactly as before.
+
+## Groq quick start
+
+```bash
+export GROQ_API_KEY=your_api_key_here
+cargo build --release
+GROQ_API_KEY=$GROQ_API_KEY ./target/release/hyprwhspr-rs --groq
+```
+
+Toggle the backend without re-compiling by editing `~/.config/hyprwhspr-rs/config.jsonc` (`use_groq_backend`) or by supplying `--groq` on the command line. The flag always wins over the config file so you can temporarily opt into Groq without touching disk.
 
 # Development
 

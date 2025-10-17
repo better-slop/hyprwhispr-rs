@@ -44,6 +44,9 @@ pub struct Config {
     #[serde(default)]
     pub fallback_cli: bool,
 
+    #[serde(default)]
+    pub use_groq_backend: bool,
+
     #[serde(default = "default_threads")]
     pub threads: usize,
 
@@ -189,6 +192,7 @@ impl Default for Config {
             shortcuts: ShortcutsConfig::default(),
             model: default_model(),
             fallback_cli: false,
+            use_groq_backend: false,
             threads: default_threads(),
             word_overrides: HashMap::new(),
             whisper_prompt: default_whisper_prompt(),

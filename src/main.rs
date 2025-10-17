@@ -1,5 +1,5 @@
 use anyhow::Result;
-use hyprwhspr_rs::{logging::TextPipelineFormatter, ConfigManager, HyprwhsprApp};
+use hyprwhspr_rs::{logging::TextPipelineFormatter, BackendKind, ConfigManager, HyprwhsprApp};
 use std::env;
 use tokio::signal;
 use tracing::info;
@@ -19,9 +19,15 @@ async fn main() -> Result<()> {
     // Check for test mode
     let args: Vec<String> = env::args().collect();
     let test_mode = args.contains(&"--test".to_string());
+    let groq_mode = args.contains(&"--groq".to_string());
+    let cli_backend_override = if groq_mode {
+        Some(BackendKind::Groq)
+    } else {
+        None
+    };
 
     if test_mode {
-        return run_test_mode().await;
+        return run_test_mode(cli_backend_override).await;
     }
 
     info!("🚀 hyprwhspr-rs starting up!");
@@ -46,7 +52,7 @@ async fn main() -> Result<()> {
     info!("   Audio feedback: {}", config.audio_feedback);
 
     // Initialize application
-    let app = HyprwhsprApp::new(config_manager)?;
+    let app = HyprwhsprApp::new(config_manager, cli_backend_override)?;
 
     // Set up signal handling
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -99,7 +105,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_test_mode() -> Result<()> {
+async fn run_test_mode(cli_backend_override: Option<BackendKind>) -> Result<()> {
     use hyprwhspr_rs::app_test::HyprwhsprAppTest;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -116,7 +122,7 @@ async fn run_test_mode() -> Result<()> {
     info!("   Audio feedback: {}", config.audio_feedback);
 
     // Initialize application
-    let mut app = HyprwhsprAppTest::new(config_manager)?;
+    let mut app = HyprwhsprAppTest::new(config_manager, cli_backend_override)?;
 
     info!("");
     info!("📝 Instructions:");
