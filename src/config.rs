@@ -88,6 +88,9 @@ pub struct Config {
 
     #[serde(default)]
     pub models_dirs: Vec<String>,
+
+    #[serde(default)]
+    pub remote_transcription: RemoteTranscriptionConfig,
 }
 
 fn default_gpu_layers() -> i32 {
@@ -154,6 +157,14 @@ fn default_vad_samples_overlap() -> f32 {
     0.10
 }
 
+fn default_remote_timeout_ms() -> u64 {
+    45_000
+}
+
+fn default_remote_max_retries() -> u32 {
+    3
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct VadConfig {
@@ -182,6 +193,53 @@ impl Default for VadConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteProviderKind {
+    Groq,
+    Gemini,
+}
+
+impl RemoteProviderKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Groq => "groq",
+            Self::Gemini => "gemini",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RemoteTranscriptionConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<RemoteProviderKind>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groq_model: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gemini_model: Option<String>,
+
+    #[serde(default = "default_remote_timeout_ms")]
+    pub request_timeout_ms: u64,
+
+    #[serde(default = "default_remote_max_retries")]
+    pub max_retries: u32,
+}
+
+impl Default for RemoteTranscriptionConfig {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            groq_model: None,
+            gemini_model: None,
+            request_timeout_ms: default_remote_timeout_ms(),
+            max_retries: default_remote_max_retries(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         let mut config = Self {
@@ -204,6 +262,7 @@ impl Default for Config {
             vad: VadConfig::default(),
             no_speech_threshold: default_no_speech_threshold(),
             models_dirs: Vec::new(),
+            remote_transcription: RemoteTranscriptionConfig::default(),
         };
         config.normalize_shortcuts();
         config

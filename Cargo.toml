@@ -47,6 +47,11 @@ regex = "1"
 similar = "2"
 owo-colors = { version = "4", features = ["supports-colors"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "gzip", "brotli", "deflate", "rustls-tls"] }
+async-trait = "0.1"
+bytes = "1"
+base64 = "0.21"
+flacenc = { version = "0.5", default-features = false }
 
 [features]
 default = []

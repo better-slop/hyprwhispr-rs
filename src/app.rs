@@ -144,6 +144,8 @@ impl HyprwhsprApp {
             config.gpu_layers,
             vad_options,
             config.no_speech_threshold,
+            config.fallback_cli,
+            config.remote_transcription.clone(),
         )?;
 
         whisper_manager
@@ -295,7 +297,9 @@ impl HyprwhsprApp {
             || self.current_config.gpu_layers != new_config.gpu_layers
             || self.current_config.vad != new_config.vad
             || (self.current_config.no_speech_threshold - new_config.no_speech_threshold).abs()
-                > f32::EPSILON;
+                > f32::EPSILON
+            || self.current_config.remote_transcription != new_config.remote_transcription
+            || self.current_config.fallback_cli != new_config.fallback_cli;
 
         if whisper_changed {
             let vad_options = build_vad_options(&self.config_manager, &new_config);
@@ -308,6 +312,8 @@ impl HyprwhsprApp {
                 new_config.gpu_layers,
                 vad_options,
                 new_config.no_speech_threshold,
+                new_config.fallback_cli,
+                new_config.remote_transcription.clone(),
             )?;
             manager.initialize()?;
             self.whisper_manager = manager;
