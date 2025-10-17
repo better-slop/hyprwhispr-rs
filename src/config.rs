@@ -88,6 +88,9 @@ pub struct Config {
 
     #[serde(default)]
     pub models_dirs: Vec<String>,
+
+    #[serde(default)]
+    pub transcription: TranscriptionConfig,
 }
 
 fn default_gpu_layers() -> i32 {
@@ -154,6 +157,38 @@ fn default_vad_samples_overlap() -> f32 {
     0.10
 }
 
+fn default_transcription_request_timeout_secs() -> u64 {
+    45
+}
+
+fn default_transcription_max_retries() -> u32 {
+    2
+}
+
+fn default_groq_model() -> String {
+    "whisper-large-v3-turbo".to_string()
+}
+
+fn default_groq_endpoint() -> String {
+    "https://api.groq.com/openai/v1/audio/transcriptions".to_string()
+}
+
+fn default_gemini_model() -> String {
+    "gemini-2.5-pro-exp-0827".to_string()
+}
+
+fn default_gemini_endpoint() -> String {
+    "https://generativelanguage.googleapis.com/v1beta/models".to_string()
+}
+
+fn default_gemini_temperature() -> f32 {
+    0.0
+}
+
+fn default_gemini_max_output_tokens() -> u32 {
+    1024
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct VadConfig {
@@ -182,6 +217,88 @@ impl Default for VadConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionProvider {
+    Local,
+    Groq,
+    Gemini,
+}
+
+impl Default for TranscriptionProvider {
+    fn default() -> Self {
+        TranscriptionProvider::Local
+    }
+}
+
+impl TranscriptionProvider {
+    pub fn label(&self) -> &'static str {
+        match self {
+            TranscriptionProvider::Local => "whisper.cpp (local)",
+            TranscriptionProvider::Groq => "Groq Whisper API",
+            TranscriptionProvider::Gemini => "Gemini 2.5 Pro Flash",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct GroqConfig {
+    pub model: String,
+    pub endpoint: String,
+}
+
+impl Default for GroqConfig {
+    fn default() -> Self {
+        Self {
+            model: default_groq_model(),
+            endpoint: default_groq_endpoint(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct GeminiConfig {
+    pub model: String,
+    pub endpoint: String,
+    pub temperature: f32,
+    pub max_output_tokens: u32,
+}
+
+impl Default for GeminiConfig {
+    fn default() -> Self {
+        Self {
+            model: default_gemini_model(),
+            endpoint: default_gemini_endpoint(),
+            temperature: default_gemini_temperature(),
+            max_output_tokens: default_gemini_max_output_tokens(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TranscriptionConfig {
+    pub provider: TranscriptionProvider,
+    pub request_timeout_secs: u64,
+    pub max_retries: u32,
+    pub groq: GroqConfig,
+    pub gemini: GeminiConfig,
+}
+
+impl Default for TranscriptionConfig {
+    fn default() -> Self {
+        Self {
+            provider: TranscriptionProvider::default(),
+            request_timeout_secs: default_transcription_request_timeout_secs(),
+            max_retries: default_transcription_max_retries(),
+            groq: GroqConfig::default(),
+            gemini: GeminiConfig::default(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         let mut config = Self {
@@ -204,6 +321,7 @@ impl Default for Config {
             vad: VadConfig::default(),
             no_speech_threshold: default_no_speech_threshold(),
             models_dirs: Vec::new(),
+            transcription: TranscriptionConfig::default(),
         };
         config.normalize_shortcuts();
         config

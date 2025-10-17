@@ -1,5 +1,7 @@
 use anyhow::Result;
-use hyprwhspr_rs::{logging::TextPipelineFormatter, ConfigManager, HyprwhsprApp};
+use hyprwhspr_rs::{
+    config::TranscriptionProvider, logging::TextPipelineFormatter, ConfigManager, HyprwhsprApp,
+};
 use std::env;
 use tokio::signal;
 use tracing::info;
@@ -32,7 +34,13 @@ async fn main() -> Result<()> {
     config_manager.start_watching();
     let config = config_manager.get();
     info!("✅ Configuration loaded");
-    info!("   Model: {}", config.model);
+    info!(
+        "   Transcription backend: {}",
+        config.transcription.provider.label()
+    );
+    if matches!(config.transcription.provider, TranscriptionProvider::Local) {
+        info!("   Model: {}", config.model);
+    }
     if let Some(shortcut) = config.press_shortcut() {
         info!("   Press shortcut: {}", shortcut);
     } else {

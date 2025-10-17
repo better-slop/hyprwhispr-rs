@@ -16,6 +16,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 jsonc-parser = { version = "0.26.3", features = ["serde"] }
 
+# HTTP & async utilities
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+bytes = "1"
+base64 = "0.21"
+
 # Error handling
 anyhow = "1"
 thiserror = "1"

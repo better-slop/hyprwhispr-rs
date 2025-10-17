@@ -7,14 +7,15 @@ use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
 use crate::config::{Config, ConfigManager};
 use crate::input::TextInjector;
 use crate::status::StatusWriter;
-use crate::whisper::{WhisperManager, WhisperVadOptions};
+use crate::transcription::TranscriptionBackend;
+use crate::whisper::WhisperVadOptions;
 
 /// Test version of the app that doesn't use global shortcuts
 pub struct HyprwhsprAppTest {
     config_manager: ConfigManager,
     audio_capture: AudioCapture,
     audio_feedback: AudioFeedback,
-    whisper_manager: WhisperManager,
+    transcriber: TranscriptionBackend,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
     current_config: Config,
@@ -40,20 +41,17 @@ impl HyprwhsprAppTest {
 
         let vad_options = build_vad_options(&config_manager, &config);
 
-        let whisper_manager = WhisperManager::new(
-            config_manager.get_model_path(),
-            config_manager.get_whisper_binary_path(),
-            config.threads,
-            config.whisper_prompt.clone(),
-            config_manager.get_temp_dir(),
-            config.gpu_layers,
-            vad_options,
-            config.no_speech_threshold,
-        )?;
+        let transcriber = TranscriptionBackend::build(&config_manager, &config, vad_options)
+            .context("Failed to configure transcription backend")?;
 
-        whisper_manager
+        transcriber
             .initialize()
-            .context("Failed to initialize Whisper")?;
+            .context("Failed to initialize transcription backend")?;
+
+        info!(
+            "🎯 Active transcription backend: {}",
+            transcriber.provider().label()
+        );
 
         let text_injector = TextInjector::new(
             config.shift_paste,
@@ -68,7 +66,7 @@ impl HyprwhsprAppTest {
             config_manager,
             audio_capture,
             audio_feedback,
-            whisper_manager,
+            transcriber,
             text_injector: Arc::new(Mutex::new(text_injector)),
             status_writer,
             current_config: config,
@@ -105,28 +103,22 @@ impl HyprwhsprAppTest {
             new_config.auto_copy_clipboard,
         )?;
 
-        let whisper_changed = self.current_config.model != new_config.model
-            || self.current_config.whisper_prompt != new_config.whisper_prompt
-            || self.current_config.threads != new_config.threads
-            || self.current_config.gpu_layers != new_config.gpu_layers
-            || self.current_config.vad != new_config.vad
-            || (self.current_config.no_speech_threshold - new_config.no_speech_threshold).abs()
-                > f32::EPSILON;
+        let transcriber_changed =
+            TranscriptionBackend::needs_refresh(&self.current_config, &new_config);
 
-        if whisper_changed {
+        if transcriber_changed {
             let vad_options = build_vad_options(&self.config_manager, &new_config);
-            let manager = WhisperManager::new(
-                self.config_manager.get_model_path(),
-                self.config_manager.get_whisper_binary_path(),
-                new_config.threads,
-                new_config.whisper_prompt.clone(),
-                self.config_manager.get_temp_dir(),
-                new_config.gpu_layers,
-                vad_options,
-                new_config.no_speech_threshold,
-            )?;
-            manager.initialize()?;
-            self.whisper_manager = manager;
+            let backend =
+                TranscriptionBackend::build(&self.config_manager, &new_config, vad_options)
+                    .context("Failed to reconfigure transcription backend")?;
+            backend
+                .initialize()
+                .context("Failed to initialize updated transcription backend")?;
+            info!(
+                "🎯 Active transcription backend: {}",
+                backend.provider().label()
+            );
+            self.transcriber = backend;
         }
 
         self.text_injector = Arc::new(Mutex::new(text_injector));
@@ -203,7 +195,7 @@ impl HyprwhsprAppTest {
     }
 
     async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
-        let transcription = self.whisper_manager.transcribe(audio_data).await?;
+        let transcription = self.transcriber.transcribe(audio_data).await?;
 
         if transcription.trim().is_empty() {
             warn!("Empty transcription - Whisper couldn't understand the audio");
