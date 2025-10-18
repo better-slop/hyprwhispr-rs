@@ -11,7 +11,7 @@
 
 - whisper.cpp ([GitHub](https://github.com/ggml-org/whisper.cpp), [AUR](https://aur.archlinux.org/packages/whisper.cpp))
 - Groq or Gemini API key (optional)
-  - Groq is cheap and fast as hell. Advanced/pretty formatting not included.
+  - Groq is cheap and fast as hell. Advanced/pretty formatting not included. [[Data Controls](https://console.groq.com/settings/data-controls)]
   - Slow, but much better output formatting.
 
 ## Features
@@ -122,7 +122,8 @@
 
 </details>
 
-## Release Process
+<details>
+  <summary><strong>Release process</strong></summary>
 
 Releases are tag-driven and automated by GitHub Actions. Runtime builds continue to rely on a local `whisper.cpp` installation, so validate that dependency before shipping a version.
 
@@ -132,6 +133,8 @@ Releases are tag-driven and automated by GitHub Actions. Runtime builds continue
 4. When stabilizing, run `cargo release --execute` to cut, tag, and push the final version. The same workflow publishes the crate to crates.io because stable tags omit the prerelease suffix.
 
 > Define `CRATES_IO_TOKEN` in the repository secrets with publish-only permissions so the workflow can push stable releases to crates.io.
+
+</details>
 
 ## To Do
 
