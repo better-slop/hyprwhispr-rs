@@ -4,6 +4,8 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
+#[cfg(feature = "fast-vad")]
+use crate::audio::{FastVad, FastVadOutcome};
 use crate::config::{Config, ConfigManager};
 use crate::input::TextInjector;
 use crate::status::StatusWriter;
@@ -16,6 +18,8 @@ pub struct HyprwhsprAppTest {
     audio_capture: AudioCapture,
     audio_feedback: AudioFeedback,
     transcriber: TranscriptionBackend,
+    #[cfg(feature = "fast-vad")]
+    fast_vad: Option<FastVad>,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
     current_config: Config,
@@ -63,11 +67,17 @@ impl HyprwhsprAppTest {
         let status_writer = StatusWriter::new()?;
         status_writer.set_recording(false)?;
 
+        #[cfg(feature = "fast-vad")]
+        let fast_vad = FastVad::maybe_new(&config.fast_vad)
+            .context("Failed to initialize fast VAD pipeline")?;
+
         Ok(Self {
             config_manager,
             audio_capture,
             audio_feedback,
             transcriber,
+            #[cfg(feature = "fast-vad")]
+            fast_vad,
             text_injector: Arc::new(Mutex::new(text_injector)),
             status_writer,
             current_config: config,
@@ -121,6 +131,12 @@ impl HyprwhsprAppTest {
                 backend.provider().label()
             );
             self.transcriber = backend;
+        }
+
+        #[cfg(feature = "fast-vad")]
+        if self.current_config.fast_vad != new_config.fast_vad {
+            self.fast_vad = FastVad::maybe_new(&new_config.fast_vad)
+                .context("Failed to refresh fast VAD pipeline")?;
         }
 
         self.text_injector = Arc::new(Mutex::new(text_injector));
@@ -196,8 +212,43 @@ impl HyprwhsprAppTest {
         Ok(())
     }
 
+    #[cfg(feature = "fast-vad")]
+    fn preprocess_audio(&mut self, audio_data: Vec<f32>) -> Result<Option<Vec<f32>>> {
+        if let Some(vad) = self.fast_vad.as_mut() {
+            let outcome = vad.trim(&audio_data).context("Fast VAD trimming failed")?;
+            if outcome.trimmed_audio.is_empty() {
+                info!(
+                    "🎧 Recording contained only silence after fast VAD trimming; skipping transcription"
+                );
+                return Ok(None);
+            }
+
+            let FastVadOutcome { trimmed_audio, .. } = outcome;
+
+            return Ok(Some(trimmed_audio));
+        }
+
+        Ok(Some(audio_data))
+    }
+
+    #[cfg(not(feature = "fast-vad"))]
+    fn preprocess_audio(&mut self, audio_data: Vec<f32>) -> Result<Option<Vec<f32>>> {
+        Ok(Some(audio_data))
+    }
+
     async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
-        let transcription = self.transcriber.transcribe(audio_data).await?;
+        let maybe_audio = self.preprocess_audio(audio_data)?;
+
+        let Some(audio_for_transcription) = maybe_audio else {
+            return Ok(());
+        };
+
+        if audio_for_transcription.is_empty() {
+            info!("🎧 No audio remaining after preprocessing; skipping transcription");
+            return Ok(());
+        }
+
+        let transcription = self.transcriber.transcribe(audio_for_transcription).await?;
 
         if transcription.trim().is_empty() {
             warn!("Empty transcription - Whisper couldn't understand the audio");

@@ -22,3 +22,14 @@ This project ships tagged releases from GitHub Actions. Every artifact assumes t
 ## Verifying whisper.cpp availability
 
 The workflow does not bundle `whisper.cpp`; verify installers or downstream packages make it available (`whisper-cpp` package on Arch/AUR, manual build on other distros) before announcing a release.
+
+## Preflight checks
+
+Run the usual quality gates before tagging:
+
+- `cargo fmt`
+- `cargo clippy --all-targets`
+- `cargo test`
+- `cargo clippy --all-targets --features fast-vad`
+- `cargo test --features fast-vad`
+- `cargo build --release --features fast-vad`

@@ -28,6 +28,7 @@ thiserror = "1"
 # Audio
 cpal = "0.15"
 rodio = "0.17"
+earshot = { version = "0.1", optional = true }
 
 # Input
 evdev = "0.12"
@@ -56,6 +57,7 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 [features]
 default = []
 whisper-native = ["whisper-rs"]
+fast-vad = ["earshot"]
 
 [profile.release]
 opt-level = 3

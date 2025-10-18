@@ -23,6 +23,7 @@
   - word overrides
   - multi provider support
   - hot reloading during runtime
+- Optional Earshot-based fast VAD trimming (compile with `--features fast-vad`)
 
 ## Built for Hyprland
 
@@ -75,6 +76,17 @@
     ]
   },
   "audio_device": null, // Force a specific input device index (null uses system default)
+  "fast_vad": {
+    "enabled": false, // Requires building with `--features fast-vad`
+    "profile": "aggressive", // quality | low_bitrate | aggressive | very_aggressive
+    "min_speech_ms": 120, // Minimum detected speech before keeping a segment
+    "silence_timeout_ms": 500, // Drop silence longer than this (ms)
+    "pre_roll_ms": 120, // Audio to keep before speech to avoid clipping words
+    "post_roll_ms": 150, // Audio to keep after speech before trimming
+    "volatility_window": 24, // Frames observed for adaptive aggressiveness (30 ms per frame)
+    "volatility_increase_threshold": 0.35, // Bump profile when toggles exceed this ratio
+    "volatility_decrease_threshold": 0.12 // Relax profile when toggles stay below this ratio
+  },
   "vad": {
     "enabled": false, // Toggles Silero VAD inside whisper.cpp
     "model": "ggml-silero-v5.1.2.bin", // Path or filename for the ggml Silero VAD model (ggml-silero-v5.1.2.bin)
@@ -123,6 +135,23 @@
 ```
 
 </details>
+
+### Fast Earshot VAD (optional)
+
+When built with `cargo build --release --features fast-vad`, hyprwhspr-rs uses the
+[`earshot`](https://crates.io/crates/earshot) VoiceActivityDetector to trim silence before audio is sent to any
+transcription provider. The feature stays disabled by default so existing installs keep their dependencies stable.
+
+- Works on 16 kHz mono PCM from the capture layer and shares the trimmed buffer across whisper.cpp, Groq, and Gemini.
+- Drops silent stretches longer than the configured timeout while keeping configurable pre-roll and post-roll padding so
+  word edges remain intact.
+- Adapts the underlying Earshot aggressiveness based on recent speech/silence volatility—no more endlessly flapping
+  microphones.
+- If an entire recording is silent, the app short-circuits the upload path instead of dispatching an empty request.
+
+Enable it by compiling with the `fast-vad` feature flag and toggling the `fast_vad.enabled` switch in your config file.
+All of the other fields under `fast_vad` map directly to the trimmer’s behaviour so you can tune aggressiveness without
+recompiling.
 
 <details>
   <summary><strong>Release process</strong></summary>
