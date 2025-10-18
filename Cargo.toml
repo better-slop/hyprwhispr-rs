@@ -28,6 +28,7 @@ thiserror = "1"
 # Audio
 cpal = "0.15"
 rodio = "0.17"
+earshot = "0.1"
 
 # Input
 evdev = "0.12"

@@ -23,6 +23,7 @@
   - word overrides
   - multi provider support
   - hot reloading during runtime
+- Optional fast VAD trims (`fast_vad.enabled`) audio files, reducing inferences costs while increasing output speed
 
 ## Built for Hyprland
 
@@ -75,6 +76,17 @@
     ]
   },
   "audio_device": null, // Force a specific input device index (null uses system default)
+  "fast_vad": {
+    "enabled": false, // Enable Earshot fast VAD trimming
+    "profile": "aggressive", // quality | low_bitrate | aggressive | very_aggressive (lowercase only, serde-enforced; default aggressive)
+    "min_speech_ms": 120, // Minimum detected speech before keeping a segment
+    "silence_timeout_ms": 500, // Drop silence longer than this (ms)
+    "pre_roll_ms": 120, // Audio to keep before speech to avoid clipping words
+    "post_roll_ms": 150, // Audio to keep after speech before trimming
+    "volatility_window": 24, // Frames observed for adaptive aggressiveness (30 ms per frame, matches FRAME_MS in src/audio/vad.rs)
+    "volatility_increase_threshold": 0.35, // Bump profile when toggles exceed this ratio
+    "volatility_decrease_threshold": 0.12 // Relax profile when toggles stay below this ratio
+  },
   "vad": {
     "enabled": false, // Toggles Silero VAD inside whisper.cpp
     "model": "ggml-silero-v5.1.2.bin", // Path or filename for the ggml Silero VAD model (ggml-silero-v5.1.2.bin)
@@ -121,6 +133,23 @@
   }
 }
 ```
+
+</details>
+
+<details>
+  <summary><strong>Earshot VAD trimming</strong> (optional)</summary>
+
+The default build ships with the [`earshot`](https://crates.io/crates/earshot) VoiceActivityDetector baked in. Toggle
+`fast_vad.enabled` in your config to trim silence before any provider (whisper.cpp, Groq, Gemini) sees the audio.
+
+- Operates on the 16 kHz PCM emitted by the capture layer and shares the trimmed buffer across all providers.
+- Drops silent stretches longer than the configured timeout while keeping configurable pre-roll and post-roll padding so
+  word edges remain intact.
+- Adapts Earshot’s aggressiveness based on recent speech/silence volatility—fewer uploads when the room is noisy.
+- If an entire recording is silent, the app short-circuits the upload path instead of dispatching an empty request.
+
+All other fields in the `fast_vad` block map directly to the trimmer’s behaviour, so you can tune aggressiveness without
+recompiling.
 
 </details>
 

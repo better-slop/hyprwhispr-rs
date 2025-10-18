@@ -83,6 +83,9 @@ pub struct Config {
     pub audio_device: Option<usize>,
 
     #[serde(default)]
+    pub fast_vad: FastVadConfig,
+
+    #[serde(default)]
     pub vad: VadConfig,
 
     #[serde(default)]
@@ -206,6 +209,34 @@ fn default_gemini_max_output_tokens() -> u32 {
     1024
 }
 
+fn default_fast_vad_min_speech_ms() -> u32 {
+    120
+}
+
+fn default_fast_vad_silence_timeout_ms() -> u32 {
+    500
+}
+
+fn default_fast_vad_pre_roll_ms() -> u32 {
+    120
+}
+
+fn default_fast_vad_post_roll_ms() -> u32 {
+    150
+}
+
+fn default_fast_vad_volatility_window() -> u32 {
+    24
+}
+
+fn default_fast_vad_volatility_increase_threshold() -> f32 {
+    0.35
+}
+
+fn default_fast_vad_volatility_decrease_threshold() -> f32 {
+    0.12
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct VadConfig {
@@ -230,6 +261,51 @@ impl Default for VadConfig {
             max_speech_s: default_vad_max_speech_s(),
             speech_pad_ms: default_vad_speech_pad_ms(),
             samples_overlap: default_vad_samples_overlap(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FastVadProfileConfig {
+    Quality,
+    LowBitrate,
+    Aggressive,
+    VeryAggressive,
+}
+
+impl Default for FastVadProfileConfig {
+    fn default() -> Self {
+        Self::Aggressive
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FastVadConfig {
+    pub enabled: bool,
+    pub profile: FastVadProfileConfig,
+    pub min_speech_ms: u32,
+    pub silence_timeout_ms: u32,
+    pub pre_roll_ms: u32,
+    pub post_roll_ms: u32,
+    pub volatility_window: u32,
+    pub volatility_increase_threshold: f32,
+    pub volatility_decrease_threshold: f32,
+}
+
+impl Default for FastVadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            profile: FastVadProfileConfig::default(),
+            min_speech_ms: default_fast_vad_min_speech_ms(),
+            silence_timeout_ms: default_fast_vad_silence_timeout_ms(),
+            pre_roll_ms: default_fast_vad_pre_roll_ms(),
+            post_roll_ms: default_fast_vad_post_roll_ms(),
+            volatility_window: default_fast_vad_volatility_window(),
+            volatility_increase_threshold: default_fast_vad_volatility_increase_threshold(),
+            volatility_decrease_threshold: default_fast_vad_volatility_decrease_threshold(),
         }
     }
 }
@@ -363,6 +439,7 @@ impl Default for Config {
             shift_paste: default_shift_paste(),
             paste_hints: PasteHintsConfig::default(),
             audio_device: None,
+            fast_vad: FastVadConfig::default(),
             vad: VadConfig::default(),
             transcription: TranscriptionConfig::default(),
             legacy_model: None,
