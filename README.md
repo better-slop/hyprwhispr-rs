@@ -37,7 +37,8 @@
     - pretty logs: `RUST_LOG=debug ./target/release/hyprwhspr-rs`
     - production release: `./target/release/hyprwhspr-rs`
 
-## Example Configuration
+<details>
+  <summary><strong>Example <code>~/.config/hyprwhspr-rs/config.jsonc</code></strong></summary>
 
 ```jsonc
 {
@@ -118,6 +119,8 @@
   }
 }
 ```
+
+</details>
 
 ## To Do
 
