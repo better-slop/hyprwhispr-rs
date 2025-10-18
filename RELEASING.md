@@ -22,3 +22,9 @@ This project ships tagged releases from GitHub Actions. Every artifact assumes t
 ## Verifying whisper.cpp availability
 
 The workflow does not bundle `whisper.cpp`; verify installers or downstream packages make it available (`whisper-cpp` package on Arch/AUR, manual build on other distros) before announcing a release.
+
+## Fast VAD (Earshot) checks
+
+- Build and sanity test the optional fast VAD feature flag: `cargo build --release --features fast-vad`.
+- Run the full suite with trimming enabled: `cargo test --features fast-vad`.
+- Capture comparative timings when needed: `cargo test --features "fast-vad bench-fast-vad" -- --nocapture` prints the Earshot benchmark helper.

@@ -86,6 +86,9 @@ pub struct Config {
     pub vad: VadConfig,
 
     #[serde(default)]
+    pub fast_vad: FastVadConfig,
+
+    #[serde(default)]
     pub transcription: TranscriptionConfig,
 
     #[serde(default, rename = "model", skip_serializing)]
@@ -174,6 +177,30 @@ fn default_vad_samples_overlap() -> f32 {
     0.10
 }
 
+fn default_fast_vad_min_speech_ms() -> u32 {
+    120
+}
+
+fn default_fast_vad_silence_timeout_ms() -> u32 {
+    500
+}
+
+fn default_fast_vad_pre_roll_ms() -> u32 {
+    90
+}
+
+fn default_fast_vad_post_roll_ms() -> u32 {
+    150
+}
+
+fn default_fast_vad_volatility_window_ms() -> u32 {
+    300
+}
+
+fn default_fast_vad_volatility_sensitivity() -> f32 {
+    0.5
+}
+
 fn default_transcription_request_timeout_secs() -> u64 {
     45
 }
@@ -230,6 +257,49 @@ impl Default for VadConfig {
             max_speech_s: default_vad_max_speech_s(),
             speech_pad_ms: default_vad_speech_pad_ms(),
             samples_overlap: default_vad_samples_overlap(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FastVadProfile {
+    Quality,
+    Aggressive,
+    VeryAggressive,
+    Turbo,
+}
+
+impl Default for FastVadProfile {
+    fn default() -> Self {
+        FastVadProfile::Aggressive
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FastVadConfig {
+    pub enabled: bool,
+    pub profile: FastVadProfile,
+    pub min_speech_ms: u32,
+    pub silence_timeout_ms: u32,
+    pub pre_roll_ms: u32,
+    pub post_roll_ms: u32,
+    pub volatility_window_ms: u32,
+    pub volatility_sensitivity: f32,
+}
+
+impl Default for FastVadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            profile: FastVadProfile::default(),
+            min_speech_ms: default_fast_vad_min_speech_ms(),
+            silence_timeout_ms: default_fast_vad_silence_timeout_ms(),
+            pre_roll_ms: default_fast_vad_pre_roll_ms(),
+            post_roll_ms: default_fast_vad_post_roll_ms(),
+            volatility_window_ms: default_fast_vad_volatility_window_ms(),
+            volatility_sensitivity: default_fast_vad_volatility_sensitivity(),
         }
     }
 }

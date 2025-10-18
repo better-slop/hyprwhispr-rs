@@ -35,6 +35,7 @@
 1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`
 2. `cd hyprwhspr-rs`
 3. `cargo build --release`
+   - Enable the Earshot-based fast VAD: `cargo build --release --features fast-vad`
 4. Run using:
     - pretty logs: `RUST_LOG=debug ./target/release/hyprwhspr-rs`
     - production release: `./target/release/hyprwhspr-rs`
@@ -91,6 +92,16 @@
     // Overlap ratio between segments (seconds). Higher overlap helps smooth transitions at the cost of a little extra decode time.
     "samples_overlap": 0.1,
   },
+  "fast_vad": {
+    "enabled": false, // Requires building with --features fast-vad
+    "profile": "aggressive", // Earshot profile: quality | aggressive | very_aggressive | turbo
+    "min_speech_ms": 120, // Frames required before treating audio as speech
+    "silence_timeout_ms": 500, // Consecutive silence before cutting the segment
+    "pre_roll_ms": 90, // Silence padding added before each detected speech segment
+    "post_roll_ms": 150, // Silence padding retained after speech to avoid clipping
+    "volatility_window_ms": 300, // Rolling window used to adapt to jittery inputs
+    "volatility_sensitivity": 0.5 // How aggressively to react to decision volatility
+  },
   "transcription": {
     "provider": "whisper_cpp", // whisper_cpp | groq | gemini
     "request_timeout_secs": 45,
@@ -123,6 +134,13 @@
 ```
 
 </details>
+
+### Earshot fast VAD
+
+- Build with `--features fast-vad` to replace Silero trimming with Earshot's ultra-light detector. The optimized pipeline feeds the reduced buffer to whisper.cpp, Groq, and Gemini alike.
+- Configure behaviour via the `fast_vad` block. Start with `profile = "aggressive"`, then tune `min_speech_ms`, `silence_timeout_ms`, `pre_roll_ms`, and `post_roll_ms` to match your microphone and speaking cadence.
+- The adaptive controller monitors the last `volatility_window_ms` worth of frame flips; bump `volatility_sensitivity` when you want extra damping in noisy rooms, or lower it for snappier reactions.
+- Want numbers? Run `cargo test --features "fast-vad bench-fast-vad" -- --nocapture` to print the benchmark helper that compares Earshot trimming against the legacy passthrough path.
 
 <details>
   <summary><strong>Release process</strong></summary>

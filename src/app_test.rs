@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
+use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback, FastStreamTrimmer};
 use crate::config::{Config, ConfigManager};
 use crate::input::TextInjector;
 use crate::status::StatusWriter;
@@ -15,6 +15,7 @@ pub struct HyprwhsprAppTest {
     config_manager: ConfigManager,
     audio_capture: AudioCapture,
     audio_feedback: AudioFeedback,
+    fast_vad_trimmer: FastStreamTrimmer,
     transcriber: TranscriptionBackend,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
@@ -40,6 +41,7 @@ impl HyprwhsprAppTest {
         );
 
         let vad_options = build_vad_options(&config_manager, &config);
+        let fast_vad_trimmer = FastStreamTrimmer::new(config.fast_vad.clone());
 
         let transcriber = TranscriptionBackend::build(&config_manager, &config, vad_options)
             .context("Failed to configure transcription backend")?;
@@ -68,6 +70,7 @@ impl HyprwhsprAppTest {
             audio_capture,
             audio_feedback,
             transcriber,
+            fast_vad_trimmer,
             text_injector: Arc::new(Mutex::new(text_injector)),
             status_writer,
             current_config: config,
@@ -123,6 +126,8 @@ impl HyprwhsprAppTest {
             self.transcriber = backend;
         }
 
+        self.fast_vad_trimmer
+            .update_config(new_config.fast_vad.clone());
         self.text_injector = Arc::new(Mutex::new(text_injector));
         self.audio_feedback = audio_feedback;
         self.current_config = new_config;
@@ -197,7 +202,25 @@ impl HyprwhsprAppTest {
     }
 
     async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
-        let transcription = self.transcriber.transcribe(audio_data).await?;
+        let sample_rate = self.audio_capture.sample_rate();
+        let original_len = audio_data.len();
+        let trimmed = self.fast_vad_trimmer.trim(audio_data, sample_rate);
+
+        if trimmed.is_empty() {
+            info!("🎚️  Fast VAD detected only silence; skipping transcription");
+            return Ok(());
+        }
+
+        if trimmed.len() != original_len {
+            let original_secs = original_len as f32 / sample_rate as f32;
+            let trimmed_secs = trimmed.len() as f32 / sample_rate as f32;
+            info!(
+                "🔇 Fast VAD trimmed audio from {:.2}s to {:.2}s",
+                original_secs, trimmed_secs
+            );
+        }
+
+        let transcription = self.transcriber.transcribe(trimmed).await?;
 
         if transcription.trim().is_empty() {
             warn!("Empty transcription - Whisper couldn't understand the audio");

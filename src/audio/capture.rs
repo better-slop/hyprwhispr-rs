@@ -84,6 +84,10 @@ impl AudioCapture {
 
         Ok(devices)
     }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
 }
 
 impl RecordingSession {
