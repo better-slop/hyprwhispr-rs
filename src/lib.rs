@@ -5,6 +5,7 @@ pub mod config;
 pub mod input;
 pub mod logging;
 pub mod status;
+pub mod transcription;
 pub mod whisper;
 
 pub use app::HyprwhsprApp;

@@ -5,19 +5,39 @@
 </div>
 <hr />
 
-> ⚠️ **Experimental:** This application is highly opinionated, and its defaults may not work for you. I am exploring more ergonomic defaults... expect breaking changes.
+> ⚠️ **Experimental:** This application is opinionated, and its defaults may not work for you. I am exploring more ergonomic defaults... expect breaking changes.
 
-# Requirements
+## Requirements
 
 - whisper.cpp ([GitHub](https://github.com/ggml-org/whisper.cpp), [AUR](https://aur.archlinux.org/packages/whisper.cpp))
+- Groq or Gemini API key (optional)
+  - Groq is cheap and fast as hell. Advanced/pretty formatting not included.
+  - Slow, but much better output formatting.
 
-# Built for Hyprland
+## Features
+
+- Fast speech-to-text
+- Intuitive configuration
+  - word overrides
+  - multi provider support
+  - hot reloading during runtime
+
+## Built for Hyprland
 
 - Detects Hyprland via `HYPRLAND_INSTANCE_SIGNATURE` and opens the IPC socket at `$XDG_RUNTIME_DIR/hypr/<signature>/.socket.sock`.
 - Execs `dispatch sendshortcut` commands against the active window to paste dictated text, inspecting `activewindow` to decide when `Shift` is required for a hardcoded list of programs.
 - Falls back to a Wayland virtual keyboard client or a simulated keypress paste if IPC communication fails.
 
-# Example Configuration
+## Development
+
+1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`
+2. `cd hyprwhspr-rs`
+3. `cargo build --release`
+4. Run using:
+    - pretty logs: `RUST_LOG=debug ./target/release/hyprwhspr-rs`
+    - production release: `./target/release/hyprwhspr-rs`
+
+## Example Configuration
 
 ```jsonc
 {
@@ -25,12 +45,6 @@
     "press": "SUPER+ALT+D",
     "hold": "SUPER+ALT+CTRL",
   },
-  "model": "large-v3-turbo-q8_0", // Whisper model to use (must exist in specified directories)
-  "models_dirs": [
-    "~/.config/hyprwhspr-rs/models"
-  ], // Directories to search for models
-  "fallback_cli": false, // Fallback to whisper-cli (uses CPU)
-  "threads": 4, // CPU threads to dedicate to transcription when using whisper-cli
   "word_overrides": {
     "under score": "_",
     "em dash": "—",
@@ -45,8 +59,6 @@
     "Hyperland": "hyprland",
     "hyperland": "hyprland",
   },
-  // Prompt text passed to Whisper for additional context.
-  "whisper_prompt": "Transcribe as technical documentation with proper capitalization, acronyms, and technical terminology. Do not add punctuation.",
   "audio_feedback": true, // Play start/stop sounds while recording
   "start_sound_volume": 0.1, // 0.1 - 1.0
   "stop_sound_volume": 0.1, // 0.1 - 1.0
@@ -54,9 +66,12 @@
   "stop_sound_path": null, // Optional custom audio asset overrides
   "auto_copy_clipboard": true, // Automatically copy the final transcription to the clipboard
   "shift_paste": false, // Whether to force shift paste
+  "paste_hints": {
+    "shift": [
+      // Optional list of Hyprland window classes that should always paste with Ctrl+Shift+V
+    ]
+  },
   "audio_device": null, // Force a specific input device index (null uses system default)
-  "gpu_layers": 999, // Number of layers to keep on GPU (999 = auto/GPU preferred)
-  "no_speech_threshold": 0.6, // Whisper's built-in "no speech" confidence gate (higher = more aggressive about returning empty text)
   "vad": {
     "enabled": false, // Toggles Silero VAD inside whisper.cpp
     "model": "ggml-silero-v5.1.2.bin", // Path or filename for the ggml Silero VAD model (ggml-silero-v5.1.2.bin)
@@ -73,14 +88,42 @@
     // Overlap ratio between segments (seconds). Higher overlap helps smooth transitions at the cost of a little extra decode time.
     "samples_overlap": 0.1,
   },
+  "transcription": {
+    "provider": "whisper_cpp", // whisper_cpp | groq | gemini
+    "request_timeout_secs": 45,
+    "max_retries": 2,
+    "whisper_cpp": {
+      "prompt": "Transcribe as technical documentation with proper capitalization, acronyms, and technical terminology. Do not add punctuation.",
+      "model": "large-v3-turbo-q8_0", // Whisper model to use (must exist in specified directories)
+      "threads": 4, // CPU threads dedicated to whisper.cpp
+      "gpu_layers": 999, // Number of layers to keep on GPU (999 = auto/GPU preferred)
+      "fallback_cli": false, // Fallback to whisper-cli (uses CPU)
+      "no_speech_threshold": 0.6, // Whisper's "no speech" confidence gate
+      "models_dirs": [
+        "~/.config/hyprwhspr-rs/models"
+      ] // Directories to search for models
+    },
+    "groq": {
+      "model": "whisper-large-v3-turbo",
+      "endpoint": "https://api.groq.com/openai/v1/audio/transcriptions",
+      "prompt": "Transcribe as technical documentation with proper capitalization, acronyms, and technical terminology. Do not add punctuation."
+    },
+    "gemini": {
+      "model": "gemini-2.5-pro-exp-0827",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+      "temperature": 0.0,
+      "max_output_tokens": 1024,
+      "prompt": "Transcribe as technical documentation with proper capitalization, acronyms, and technical terminology. Do not add punctuation."
+    }
+  }
 }
 ```
 
-# Development
+## To Do
 
-1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`
-2. `cd hyprwhspr-rs`
-3. `cargo build --release`
-4. Run using:
-    - Nice logs with pretty text transformation diffs: `RUST_LOG=debug ./target/release/hyprwhspr-rs`
-    - Production release `./target/release/hyprwhspr-rs`
+- [ ] Ship waybar integration (`hyprwhspr-rs --waybar`)
+- [ ] Release on Cargo
+- [ ] Release on AUR
+- [ ] Add support for other operating systems/setups
+- [ ] Refine paste layer
+- [ ] Investigate formatting model

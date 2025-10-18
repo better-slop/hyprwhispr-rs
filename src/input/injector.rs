@@ -4,7 +4,7 @@ use arboard::Clipboard;
 use enigo::{Enigo, Keyboard, Settings};
 use regex::Regex;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -72,6 +72,7 @@ const SHIFT_PASTE_CLASSES: &[&str] = &[
     "Alacritty",
     "kitty",
     "foot",
+    "footclient",
     "WezTerm",
     "org.wezfurlong.wezterm",
     "org.gnome.Console",
@@ -85,6 +86,24 @@ const SHIFT_PASTE_CLASSES: &[&str] = &[
     "wezterm-gui",
     "rio",
     "WarpTerminal",
+    "xterm",
+    "urxvt",
+    "Ghostty",
+    "ghostty",
+    "com.mitchellh.ghostty",
+];
+
+const SHIFT_PASTE_CLASS_COMPONENTS: &[&str] = &[
+    "terminal",
+    "console",
+    "ghostty",
+    "wezterm",
+    "kitty",
+    "alacritty",
+    "warpterminal",
+    "rio",
+    "foot",
+    "konsole",
     "xterm",
     "urxvt",
 ];
@@ -144,35 +163,45 @@ impl HyprlandDispatcher {
     }
 
     async fn active_window_class(&self) -> Result<Option<String>> {
-        const COMMANDS: &[(&str, &str)] =
-            &[("activewindow", "plain"), ("j/activewindow", "legacy-json")];
+        // Try JSON-formatted activewindow first for newer Hyprland releases.
+        let json_response = self.send_command("j/activewindow").await?;
+        if let Some(class) =
+            Self::handle_activewindow_response("j/activewindow", &json_response, true)?
+        {
+            return Ok(Some(class));
+        }
 
-        for (command, label) in COMMANDS {
-            let response = self.send_command(command).await?;
-            let trimmed = response.trim();
+        // Fall back to the plain-text formatter.
+        let plain_response = self.send_command("activewindow").await?;
+        if let Some(class) =
+            Self::handle_activewindow_response("activewindow", &plain_response, false)?
+        {
+            return Ok(Some(class));
+        }
 
-            if trimmed.is_empty() {
-                debug!(command, "Hyprland activewindow returned empty string");
-                return Ok(None);
+        // Attempt v2 API (yields window address) and resolve via clients list.
+        let address_response = self.send_command("activewindowv2").await?;
+        if Self::is_unknown_request(&address_response) {
+            debug!("Hyprland does not expose activewindow/activewindowv2 on this version");
+            return Ok(None);
+        }
+
+        let address = address_response
+            .split_whitespace()
+            .next()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        if let Some(address) = address {
+            if let Some(class) = self.lookup_class_by_address(&address).await? {
+                return Ok(Some(class));
             }
-
-            if trimmed.eq_ignore_ascii_case("unknown request") {
-                debug!(
-                    command,
-                    "Hyprland does not recognize activewindow request variant ({label})"
-                );
-                continue;
-            }
-
-            match Self::extract_window_class_from_response(trimmed) {
-                Ok(class) => return Ok(class),
-                Err(err) => {
-                    debug!(
-                        command,
-                        response, "Hyprland activewindow parse failed via {label}: {err}"
-                    );
-                }
-            }
+            debug!(
+                address = address.as_str(),
+                "Hyprland activewindowv2 address could not be matched to a client class"
+            );
+        } else {
+            debug!("Hyprland activewindowv2 returned no address data");
         }
 
         Ok(None)
@@ -188,16 +217,18 @@ impl HyprlandDispatcher {
                 )
             })?;
 
-        let mut message = command.as_bytes().to_vec();
-        message.push(b'\n');
         stream
-            .write_all(&message)
+            .write_all(command.as_bytes())
             .await
             .with_context(|| format!("Failed to send IPC command: {command}"))?;
         stream
             .flush()
             .await
             .context("Failed to flush Hyprland IPC command")?;
+        stream
+            .shutdown()
+            .await
+            .context("Failed to finish Hyprland IPC write")?;
 
         let mut response = Vec::new();
         stream
@@ -211,6 +242,56 @@ impl HyprlandDispatcher {
             "Hyprland IPC response (trimmed)"
         );
         Ok(text)
+    }
+
+    fn handle_activewindow_response(
+        command: &str,
+        response: &str,
+        expect_json: bool,
+    ) -> Result<Option<String>> {
+        let trimmed = response.trim();
+
+        if trimmed.is_empty() {
+            debug!(%command, "Hyprland command returned empty string");
+            return Ok(None);
+        }
+
+        if Self::is_unknown_request(trimmed) {
+            debug!(%command, "Hyprland command unsupported on this version");
+            return Ok(None);
+        }
+
+        if expect_json {
+            if let Ok(Some(class)) = Self::extract_window_class_from_response(trimmed) {
+                return Ok(Some(class));
+            }
+        }
+
+        match Self::extract_window_class_from_response(trimmed) {
+            Ok(class) => Ok(class),
+            Err(err) => {
+                debug!(%command, response = trimmed, error = %err, "Hyprland command parse failed");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn lookup_class_by_address(&self, address: &str) -> Result<Option<String>> {
+        let clients_response = self.send_command("j/clients").await?;
+        if Self::is_unknown_request(&clients_response) {
+            debug!("Hyprland clients command not available for address lookup");
+            return Ok(None);
+        }
+
+        if let Some(class) = Self::extract_class_from_clients_json(&clients_response, address) {
+            return Ok(Some(class));
+        }
+
+        if let Some(class) = Self::extract_class_from_clients_text(&clients_response, address) {
+            return Ok(Some(class));
+        }
+
+        Ok(None)
     }
 
     fn extract_window_class_from_response(response: &str) -> Result<Option<String>> {
@@ -234,6 +315,101 @@ impl HyprlandDispatcher {
         }
 
         Err(anyhow!("No class entry found in Hyprland response"))
+    }
+
+    fn extract_class_from_clients_json(text: &str, address: &str) -> Option<String> {
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            return None;
+        };
+
+        let Some(entries) = value.as_array() else {
+            return None;
+        };
+
+        let target = Self::normalize_address(address);
+
+        for entry in entries {
+            let Some(addr) = entry.get("address").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if Self::normalize_address(addr) == target {
+                if let Some(class) = entry
+                    .get("class")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .filter(|s| !s.is_empty())
+                {
+                    return Some(class);
+                }
+                if let Some(class) = entry
+                    .get("initialClass")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .filter(|s| !s.is_empty())
+                {
+                    return Some(class);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn extract_class_from_clients_text(text: &str, address: &str) -> Option<String> {
+        let target = Self::normalize_address(address);
+        let mut in_target = false;
+
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                in_target = false;
+                continue;
+            }
+
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.contains(&target) {
+                in_target = true;
+                if let Some(class) = Self::parse_class_line(trimmed) {
+                    return Some(class);
+                }
+                continue;
+            }
+
+            if !in_target {
+                continue;
+            }
+
+            if let Some(class) = Self::parse_class_line(trimmed) {
+                return Some(class);
+            }
+        }
+
+        None
+    }
+
+    fn parse_class_line(line: &str) -> Option<String> {
+        let (key, value) = line.split_once(':')?;
+        let key = key.trim().to_ascii_lowercase();
+        if key == "class" || key == "initialclass" {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+        None
+    }
+
+    fn normalize_address(address: &str) -> String {
+        let trimmed = address.trim();
+        if let Some(stripped) = trimmed.strip_prefix("0x") {
+            stripped.to_ascii_lowercase()
+        } else {
+            trimmed.to_ascii_lowercase()
+        }
+    }
+
+    fn is_unknown_request(response: &str) -> bool {
+        response.trim().eq_ignore_ascii_case("unknown request")
     }
 }
 
@@ -666,6 +842,8 @@ pub struct TextInjector {
     enigo: Enigo,
     clipboard: Clipboard,
     word_overrides: HashMap<String, String>,
+    extra_shift_classes: HashSet<String>,
+    default_shift_paste: bool,
     hyprland_dispatcher: Option<HyprlandDispatcher>,
     wrtype_client: Option<WrtypeClient>,
     wrtype_attempted: bool,
@@ -675,7 +853,8 @@ pub struct TextInjector {
 
 impl TextInjector {
     pub fn new(
-        _shift_paste: bool,
+        shift_paste_default: bool,
+        extra_shift_classes: Vec<String>,
         word_overrides: HashMap<String, String>,
         _auto_copy_clipboard: bool,
     ) -> Result<Self> {
@@ -698,6 +877,12 @@ impl TextInjector {
             enigo,
             clipboard,
             word_overrides: sanitized_overrides,
+            extra_shift_classes: extra_shift_classes
+                .into_iter()
+                .map(|entry| entry.trim().to_ascii_lowercase())
+                .filter(|entry| !entry.is_empty())
+                .collect(),
+            default_shift_paste: shift_paste_default,
             hyprland_dispatcher,
             wrtype_client: None,
             wrtype_attempted: false,
@@ -723,18 +908,28 @@ impl TextInjector {
         // Small delay to ensure window focus is ready for input (especially on Wayland/XWayland)
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        let mut shift_hint = None;
+        let mut shift_hint: Option<bool> = None;
+        let default_shift = self.default_shift_paste;
 
         if let Some(dispatcher) = self.hyprland_dispatcher.as_ref() {
             match dispatcher.active_window_class().await {
                 Ok(class_opt) => {
                     if let Some(class) = class_opt {
-                        let needs_shift = needs_shift_for_class(&class);
-                        debug!(
-                            class = class.as_str(),
-                            needs_shift, "Hyprland active window classification"
-                        );
-                        shift_hint = Some(needs_shift);
+                        if let Some(needs_shift) =
+                            shift_hint_for_class(&class, &self.extra_shift_classes)
+                        {
+                            debug!(
+                                class = class.as_str(),
+                                needs_shift, "Hyprland active window classification"
+                            );
+                            shift_hint = Some(needs_shift);
+                        } else {
+                            debug!(
+                                class = class.as_str(),
+                                default = default_shift,
+                                "Hyprland active window classification has no explicit shift rule"
+                            );
+                        }
                     }
                 }
                 Err(err) => {
@@ -742,7 +937,7 @@ impl TextInjector {
                 }
             }
 
-            let use_shift = shift_hint.unwrap_or(true);
+            let use_shift = shift_hint.unwrap_or(default_shift);
             debug!(use_shift, "Hyprland sendshortcut paste attempt");
 
             match dispatcher.send_paste_shortcut(use_shift).await {
@@ -757,7 +952,7 @@ impl TextInjector {
         }
 
         if let Some(client) = self.ensure_wrtype_client() {
-            let use_shift = shift_hint.unwrap_or(false);
+            let use_shift = shift_hint.unwrap_or(default_shift);
             match send_virtual_keyboard_paste(client, use_shift) {
                 Ok(_) => {
                     info!("✅ Text injected via Wayland virtual keyboard");
@@ -1053,10 +1248,28 @@ fn send_virtual_keyboard_paste(client: &mut WrtypeClient, use_shift: bool) -> Re
     }
 }
 
-fn needs_shift_for_class(class: &str) -> bool {
-    SHIFT_PASTE_CLASSES
+fn shift_hint_for_class(class: &str, extra_shift_classes: &HashSet<String>) -> Option<bool> {
+    if SHIFT_PASTE_CLASSES
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(class))
+    {
+        return Some(true);
+    }
+
+    let lower = class.to_ascii_lowercase();
+    if extra_shift_classes.contains(&lower) {
+        return Some(true);
+    }
+
+    for component in lower.split(['.', '-', '_']) {
+        if SHIFT_PASTE_CLASS_COMPONENTS.iter().any(|c| c == &component)
+            || extra_shift_classes.contains(component)
+        {
+            return Some(true);
+        }
+    }
+
+    None
 }
 
 fn normalize_line_breaks(input: &str) -> String {
