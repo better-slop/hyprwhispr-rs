@@ -2,6 +2,7 @@ mod audio;
 mod gemini;
 mod groq;
 mod postprocess;
+mod prompt;
 
 use crate::config::{Config, ConfigManager, TranscriptionProvider};
 use crate::whisper::{WhisperManager, WhisperVadOptions};
@@ -13,6 +14,7 @@ pub use audio::{encode_to_flac, EncodedAudio};
 pub use gemini::GeminiTranscriber;
 pub use groq::GroqTranscriber;
 pub use postprocess::{clean_transcription, contains_only_non_speech_markers, is_prompt_artifact};
+use prompt::PromptBlueprint;
 
 pub enum TranscriptionBackend {
     Whisper(WhisperManager),
@@ -31,11 +33,12 @@ impl TranscriptionBackend {
 
         match config.transcription.provider {
             TranscriptionProvider::Local => {
+                let prompt = Self::prompt_for(config, TranscriptionProvider::Local);
                 let manager = WhisperManager::new(
                     config_manager.get_model_path(),
                     config_manager.get_whisper_binary_path(),
                     config.threads,
-                    config.whisper_prompt.clone(),
+                    prompt,
                     config_manager.get_temp_dir(),
                     config.gpu_layers,
                     vad,
@@ -44,6 +47,7 @@ impl TranscriptionBackend {
                 Ok(Self::Whisper(manager))
             }
             TranscriptionProvider::Groq => {
+                let prompt = Self::prompt_for(config, TranscriptionProvider::Groq);
                 let api_key = env::var("GROQ_API_KEY")
                     .context("GROQ_API_KEY environment variable is not set")?;
                 let provider = GroqTranscriber::new(
@@ -51,11 +55,12 @@ impl TranscriptionBackend {
                     &config.transcription.groq,
                     timeout,
                     retries,
-                    config.whisper_prompt.clone(),
+                    prompt,
                 )?;
                 Ok(Self::Groq(provider))
             }
             TranscriptionProvider::Gemini => {
+                let prompt = Self::prompt_for(config, TranscriptionProvider::Gemini);
                 let api_key = env::var("GEMINI_API_KEY")
                     .context("GEMINI_API_KEY environment variable is not set")?;
                 let provider = GeminiTranscriber::new(
@@ -63,7 +68,7 @@ impl TranscriptionBackend {
                     &config.transcription.gemini,
                     timeout,
                     retries,
-                    config.whisper_prompt.clone(),
+                    prompt,
                 )?;
                 Ok(Self::Gemini(provider))
             }
@@ -91,10 +96,6 @@ impl TranscriptionBackend {
             return true;
         }
 
-        if current.whisper_prompt != new.whisper_prompt {
-            return true;
-        }
-
         match new.transcription.provider {
             TranscriptionProvider::Local => {
                 current.model != new.model
@@ -103,18 +104,22 @@ impl TranscriptionBackend {
                     || current.vad != new.vad
                     || (current.no_speech_threshold - new.no_speech_threshold).abs() > f32::EPSILON
                     || current.models_dirs != new.models_dirs
+                    || Self::prompt_for(current, TranscriptionProvider::Local)
+                        != Self::prompt_for(new, TranscriptionProvider::Local)
             }
             TranscriptionProvider::Groq => {
-                current.transcription.request_timeout_secs
-                    != new.transcription.request_timeout_secs
+                current.transcription.request_timeout_secs != new.transcription.request_timeout_secs
                     || current.transcription.max_retries != new.transcription.max_retries
                     || current.transcription.groq != new.transcription.groq
+                    || Self::prompt_for(current, TranscriptionProvider::Groq)
+                        != Self::prompt_for(new, TranscriptionProvider::Groq)
             }
             TranscriptionProvider::Gemini => {
-                current.transcription.request_timeout_secs
-                    != new.transcription.request_timeout_secs
+                current.transcription.request_timeout_secs != new.transcription.request_timeout_secs
                     || current.transcription.max_retries != new.transcription.max_retries
                     || current.transcription.gemini != new.transcription.gemini
+                    || Self::prompt_for(current, TranscriptionProvider::Gemini)
+                        != Self::prompt_for(new, TranscriptionProvider::Gemini)
             }
         }
     }
@@ -124,6 +129,24 @@ impl TranscriptionBackend {
             TranscriptionBackend::Whisper(manager) => manager.transcribe(audio_data).await,
             TranscriptionBackend::Groq(provider) => provider.transcribe(audio_data).await,
             TranscriptionBackend::Gemini(provider) => provider.transcribe(audio_data).await,
+        }
+    }
+}
+
+impl TranscriptionBackend {
+    fn prompt_for(config: &Config, provider: TranscriptionProvider) -> String {
+        match provider {
+            TranscriptionProvider::Local => {
+                PromptBlueprint::new(None, &config.whisper_prompt).resolve()
+            }
+            TranscriptionProvider::Groq => {
+                PromptBlueprint::new(None, &config.whisper_prompt).resolve()
+            }
+            TranscriptionProvider::Gemini => PromptBlueprint::new(
+                config.transcription.gemini.prompt.as_deref(),
+                &config.whisper_prompt,
+            )
+            .resolve(),
         }
     }
 }

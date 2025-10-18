@@ -264,6 +264,8 @@ pub struct GeminiConfig {
     pub endpoint: String,
     pub temperature: f32,
     pub max_output_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 impl Default for GeminiConfig {
@@ -273,6 +275,7 @@ impl Default for GeminiConfig {
             endpoint: default_gemini_endpoint(),
             temperature: default_gemini_temperature(),
             max_output_tokens: default_gemini_max_output_tokens(),
+            prompt: None,
         }
     }
 }

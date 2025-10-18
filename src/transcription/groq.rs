@@ -57,8 +57,7 @@ impl GroqTranscriber {
 
         info!(
             "✅ Groq transcription ready (model: {}, timeout: {:?})",
-            self.model,
-            self.request_timeout
+            self.model, self.request_timeout
         );
         Ok(())
     }
@@ -75,8 +74,7 @@ impl GroqTranscriber {
         let duration_secs = audio_data.len() as f32 / 16000.0;
         info!(
             provider = self.provider_name(),
-            "🧠 Transcribing {:.2}s of audio via Groq",
-            duration_secs
+            "🧠 Transcribing {:.2}s of audio via Groq", duration_secs
         );
 
         let encoded = encode_to_flac(&audio_data).await?;

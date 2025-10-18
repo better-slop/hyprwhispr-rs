@@ -67,8 +67,7 @@ impl GeminiTranscriber {
 
         info!(
             "✅ Gemini transcription ready (model: {}, timeout: {:?})",
-            self.model,
-            self.request_timeout
+            self.model, self.request_timeout
         );
         Ok(())
     }
@@ -85,8 +84,7 @@ impl GeminiTranscriber {
         let duration_secs = audio_data.len() as f32 / 16000.0;
         info!(
             provider = self.provider_name(),
-            "🧠 Transcribing {:.2}s of audio via Gemini",
-            duration_secs
+            "🧠 Transcribing {:.2}s of audio via Gemini", duration_secs
         );
 
         let encoded = encode_to_flac(&audio_data).await?;
@@ -132,8 +130,7 @@ impl GeminiTranscriber {
 
     async fn send_once(&self, audio: &EncodedAudio, payload: &str) -> Result<String> {
         let mut url = self.endpoint.clone();
-        url.query_pairs_mut()
-            .append_pair("key", &self.api_key);
+        url.query_pairs_mut().append_pair("key", &self.api_key);
 
         let instruction = build_instruction(&self.prompt);
 
@@ -141,9 +138,7 @@ impl GeminiTranscriber {
             contents: vec![GeminiContent {
                 role: "user",
                 parts: vec![
-                    GeminiPart::Text {
-                        text: &instruction,
-                    },
+                    GeminiPart::Text { text: &instruction },
                     GeminiPart::InlineData {
                         inline_data: InlineData {
                             mime_type: audio.content_type,
@@ -208,12 +203,9 @@ fn extract_text(response: GeminiResponse) -> Option<String> {
         .into_iter()
         .flatten()
         .find_map(|candidate| {
-            candidate.content.and_then(|content| {
-                content
-                    .parts
-                    .into_iter()
-                    .find_map(|part| part.text)
-            })
+            candidate
+                .content
+                .and_then(|content| content.parts.into_iter().find_map(|part| part.text))
         })
 }
 
@@ -253,7 +245,7 @@ struct GenerationConfig {
 
 #[derive(Debug, Deserialize, Default)]
 struct GeminiResponse {
-    candidates: Option<Vec<GeminiCandidate>>, 
+    candidates: Option<Vec<GeminiCandidate>>,
 }
 
 #[derive(Debug, Deserialize)]

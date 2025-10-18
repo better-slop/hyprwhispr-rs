@@ -47,10 +47,7 @@ pub async fn encode_to_flac(audio: &[f32]) -> Result<EncodedAudio> {
         .spawn()
         .context("Failed to spawn ffmpeg for FLAC encoding. Ensure ffmpeg is installed")?;
 
-    let mut stdin = child
-        .stdin
-        .take()
-        .context("Failed to open ffmpeg stdin")?;
+    let mut stdin = child.stdin.take().context("Failed to open ffmpeg stdin")?;
     let mut stdout = child
         .stdout
         .take()
@@ -116,10 +113,7 @@ pub async fn encode_to_flac(audio: &[f32]) -> Result<EncodedAudio> {
 
     let (_, encoded, stderr_bytes) = try_join!(write_future, read_future, stderr_future)?;
 
-    let status = child
-        .wait()
-        .await
-        .context("Failed to wait for ffmpeg")?;
+    let status = child.wait().await.context("Failed to wait for ffmpeg")?;
 
     if !status.success() {
         let stderr_text = String::from_utf8_lossy(&stderr_bytes);
