@@ -7,6 +7,8 @@
 
 > ⚠️ **Experimental:** This application is largely written with AI.
 
+![hyprwhspr-rs demo](assets/hyprwhspr-rs-demo.gif)
+
 ## Requirements
 
 - whisper.cpp ([GitHub](https://github.com/ggml-org/whisper.cpp), [AUR](https://aur.archlinux.org/packages/whisper.cpp))
