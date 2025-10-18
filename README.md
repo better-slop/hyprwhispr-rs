@@ -46,6 +46,11 @@
   "stop_sound_path": null, // Optional custom audio asset overrides
   "auto_copy_clipboard": true, // Automatically copy the final transcription to the clipboard
   "shift_paste": false, // Whether to force shift paste
+  "paste_hints": {
+    "shift": [
+      // Optional list of Hyprland window classes that should always paste with Ctrl+Shift+V
+    ]
+  },
   "audio_device": null, // Force a specific input device index (null uses system default)
   "vad": {
     "enabled": false, // Toggles Silero VAD inside whisper.cpp

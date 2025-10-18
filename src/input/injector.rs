@@ -4,7 +4,7 @@ use arboard::Clipboard;
 use enigo::{Enigo, Keyboard, Settings};
 use regex::Regex;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -842,6 +842,7 @@ pub struct TextInjector {
     enigo: Enigo,
     clipboard: Clipboard,
     word_overrides: HashMap<String, String>,
+    extra_shift_classes: HashSet<String>,
     default_shift_paste: bool,
     hyprland_dispatcher: Option<HyprlandDispatcher>,
     wrtype_client: Option<WrtypeClient>,
@@ -853,6 +854,7 @@ pub struct TextInjector {
 impl TextInjector {
     pub fn new(
         shift_paste_default: bool,
+        extra_shift_classes: Vec<String>,
         word_overrides: HashMap<String, String>,
         _auto_copy_clipboard: bool,
     ) -> Result<Self> {
@@ -875,6 +877,11 @@ impl TextInjector {
             enigo,
             clipboard,
             word_overrides: sanitized_overrides,
+            extra_shift_classes: extra_shift_classes
+                .into_iter()
+                .map(|entry| entry.trim().to_ascii_lowercase())
+                .filter(|entry| !entry.is_empty())
+                .collect(),
             default_shift_paste: shift_paste_default,
             hyprland_dispatcher,
             wrtype_client: None,
@@ -908,7 +915,9 @@ impl TextInjector {
             match dispatcher.active_window_class().await {
                 Ok(class_opt) => {
                     if let Some(class) = class_opt {
-                        if let Some(needs_shift) = shift_hint_for_class(&class) {
+                        if let Some(needs_shift) =
+                            shift_hint_for_class(&class, &self.extra_shift_classes)
+                        {
                             debug!(
                                 class = class.as_str(),
                                 needs_shift, "Hyprland active window classification"
@@ -1239,7 +1248,7 @@ fn send_virtual_keyboard_paste(client: &mut WrtypeClient, use_shift: bool) -> Re
     }
 }
 
-fn shift_hint_for_class(class: &str) -> Option<bool> {
+fn shift_hint_for_class(class: &str, extra_shift_classes: &HashSet<String>) -> Option<bool> {
     if SHIFT_PASTE_CLASSES
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(class))
@@ -1248,8 +1257,14 @@ fn shift_hint_for_class(class: &str) -> Option<bool> {
     }
 
     let lower = class.to_ascii_lowercase();
+    if extra_shift_classes.contains(&lower) {
+        return Some(true);
+    }
+
     for component in lower.split(['.', '-', '_']) {
-        if SHIFT_PASTE_CLASS_COMPONENTS.iter().any(|c| c == &component) {
+        if SHIFT_PASTE_CLASS_COMPONENTS.iter().any(|c| c == &component)
+            || extra_shift_classes.contains(component)
+        {
             return Some(true);
         }
     }

@@ -32,6 +32,19 @@ impl Default for ShortcutsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PasteHintsConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shift: Vec<String>,
+}
+
+impl Default for PasteHintsConfig {
+    fn default() -> Self {
+        Self { shift: Vec::new() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     #[serde(default = "default_primary_shortcut", skip_serializing)]
     pub primary_shortcut: String,
@@ -62,6 +75,9 @@ pub struct Config {
 
     #[serde(default = "default_shift_paste")]
     pub shift_paste: bool,
+
+    #[serde(default)]
+    pub paste_hints: PasteHintsConfig,
 
     #[serde(default)]
     pub audio_device: Option<usize>,
@@ -345,6 +361,7 @@ impl Default for Config {
             stop_sound_path: None,
             auto_copy_clipboard: default_auto_copy_clipboard(),
             shift_paste: default_shift_paste(),
+            paste_hints: PasteHintsConfig::default(),
             audio_device: None,
             vad: VadConfig::default(),
             transcription: TranscriptionConfig::default(),
