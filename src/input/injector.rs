@@ -72,6 +72,7 @@ const SHIFT_PASTE_CLASSES: &[&str] = &[
     "Alacritty",
     "kitty",
     "foot",
+    "footclient",
     "WezTerm",
     "org.wezfurlong.wezterm",
     "org.gnome.Console",
@@ -85,6 +86,24 @@ const SHIFT_PASTE_CLASSES: &[&str] = &[
     "wezterm-gui",
     "rio",
     "WarpTerminal",
+    "xterm",
+    "urxvt",
+    "Ghostty",
+    "ghostty",
+    "com.mitchellh.ghostty",
+];
+
+const SHIFT_PASTE_CLASS_COMPONENTS: &[&str] = &[
+    "terminal",
+    "console",
+    "ghostty",
+    "wezterm",
+    "kitty",
+    "alacritty",
+    "warpterminal",
+    "rio",
+    "foot",
+    "konsole",
     "xterm",
     "urxvt",
 ];
@@ -823,6 +842,7 @@ pub struct TextInjector {
     enigo: Enigo,
     clipboard: Clipboard,
     word_overrides: HashMap<String, String>,
+    default_shift_paste: bool,
     hyprland_dispatcher: Option<HyprlandDispatcher>,
     wrtype_client: Option<WrtypeClient>,
     wrtype_attempted: bool,
@@ -832,7 +852,7 @@ pub struct TextInjector {
 
 impl TextInjector {
     pub fn new(
-        _shift_paste: bool,
+        shift_paste_default: bool,
         word_overrides: HashMap<String, String>,
         _auto_copy_clipboard: bool,
     ) -> Result<Self> {
@@ -855,6 +875,7 @@ impl TextInjector {
             enigo,
             clipboard,
             word_overrides: sanitized_overrides,
+            default_shift_paste: shift_paste_default,
             hyprland_dispatcher,
             wrtype_client: None,
             wrtype_attempted: false,
@@ -880,18 +901,26 @@ impl TextInjector {
         // Small delay to ensure window focus is ready for input (especially on Wayland/XWayland)
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        let mut shift_hint = None;
+        let mut shift_hint: Option<bool> = None;
+        let default_shift = self.default_shift_paste;
 
         if let Some(dispatcher) = self.hyprland_dispatcher.as_ref() {
             match dispatcher.active_window_class().await {
                 Ok(class_opt) => {
                     if let Some(class) = class_opt {
-                        let needs_shift = needs_shift_for_class(&class);
-                        debug!(
-                            class = class.as_str(),
-                            needs_shift, "Hyprland active window classification"
-                        );
-                        shift_hint = Some(needs_shift);
+                        if let Some(needs_shift) = shift_hint_for_class(&class) {
+                            debug!(
+                                class = class.as_str(),
+                                needs_shift, "Hyprland active window classification"
+                            );
+                            shift_hint = Some(needs_shift);
+                        } else {
+                            debug!(
+                                class = class.as_str(),
+                                default = default_shift,
+                                "Hyprland active window classification has no explicit shift rule"
+                            );
+                        }
                     }
                 }
                 Err(err) => {
@@ -899,7 +928,7 @@ impl TextInjector {
                 }
             }
 
-            let use_shift = shift_hint.unwrap_or(true);
+            let use_shift = shift_hint.unwrap_or(default_shift);
             debug!(use_shift, "Hyprland sendshortcut paste attempt");
 
             match dispatcher.send_paste_shortcut(use_shift).await {
@@ -914,7 +943,7 @@ impl TextInjector {
         }
 
         if let Some(client) = self.ensure_wrtype_client() {
-            let use_shift = shift_hint.unwrap_or(false);
+            let use_shift = shift_hint.unwrap_or(default_shift);
             match send_virtual_keyboard_paste(client, use_shift) {
                 Ok(_) => {
                     info!("✅ Text injected via Wayland virtual keyboard");
@@ -1210,10 +1239,22 @@ fn send_virtual_keyboard_paste(client: &mut WrtypeClient, use_shift: bool) -> Re
     }
 }
 
-fn needs_shift_for_class(class: &str) -> bool {
-    SHIFT_PASTE_CLASSES
+fn shift_hint_for_class(class: &str) -> Option<bool> {
+    if SHIFT_PASTE_CLASSES
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(class))
+    {
+        return Some(true);
+    }
+
+    let lower = class.to_ascii_lowercase();
+    for component in lower.split(['.', '-', '_']) {
+        if SHIFT_PASTE_CLASS_COMPONENTS.iter().any(|c| c == &component) {
+            return Some(true);
+        }
+    }
+
+    None
 }
 
 fn normalize_line_breaks(input: &str) -> String {
