@@ -1,0 +1,20 @@
+tag-name = "v{{version}}"
+pre-release-commit-message = "chore(release): {{version}}"
+post-release-commit-message = "chore: start next iteration"
+push-remote = "origin"
+delete-tag = false
+sign-tag = false
+allow-branch = ["main", "master"]
+dev-version = false
+
+changelog = { path = "CHANGELOG.md" }
+
+pre-release-hook = [
+  "git-cliff",
+  "-c",
+  "git-cliff.toml",
+  "-o",
+  "CHANGELOG.md",
+  "--tag",
+  "{{version}}"
+]

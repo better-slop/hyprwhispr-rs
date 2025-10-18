@@ -5,7 +5,7 @@
 </div>
 <hr />
 
-> ⚠️ **Experimental:** This application is opinionated, and its defaults may not work for you. I am exploring more ergonomic defaults... expect breaking changes.
+> ⚠️ **Experimental:** This application is largely written with AI.
 
 ## Requirements
 
@@ -110,7 +110,7 @@
       "prompt": "Transcribe as technical documentation with proper capitalization, acronyms, and technical terminology. Do not add punctuation."
     },
     "gemini": {
-      "model": "gemini-2.5-pro-exp-0827",
+      "model": "gemini-2.5-flash-preview-09-2025",
       "endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
       "temperature": 0.0,
       "max_output_tokens": 1024,
@@ -122,8 +122,20 @@
 
 </details>
 
+## Release Process
+
+Releases are tag-driven and automated by GitHub Actions. Runtime builds continue to rely on a local `whisper.cpp` installation, so validate that dependency before shipping a version.
+
+1. Install the tooling once: `cargo install cargo-release git-cliff`.
+2. For prereleases run `cargo release --no-dev-version --pre-release alpha` (append `--execute` when ready to push). This updates the changelog, creates the tag (`vX.Y.Z-alpha.N`), and prepares artifacts.
+3. Push with `git push --follow-tags`. The `release` workflow builds the binary, publishes the GitHub prerelease, and attaches the tarball plus checksum.
+4. When stabilizing, run `cargo release --execute` to cut, tag, and push the final version. The same workflow publishes the crate to crates.io because stable tags omit the prerelease suffix.
+
+> Define `CRATES_IO_TOKEN` in the repository secrets with publish-only permissions so the workflow can push stable releases to crates.io.
+
 ## To Do
 
+- [ ] Slop review/clean up
 - [ ] Ship waybar integration (`hyprwhspr-rs --waybar`)
 - [ ] Release on Cargo
 - [ ] Release on AUR
