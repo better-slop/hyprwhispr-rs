@@ -110,7 +110,7 @@
       "prompt": "Transcribe as technical documentation with proper capitalization, acronyms, and technical terminology. Do not add punctuation."
     },
     "gemini": {
-      "model": "gemini-2.5-pro-exp-0827",
+      "model": "gemini-2.5-flash-preview-09-2025",
       "endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
       "temperature": 0.0,
       "max_output_tokens": 1024,
