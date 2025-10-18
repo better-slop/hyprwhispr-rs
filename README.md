@@ -5,19 +5,37 @@
 </div>
 <hr />
 
-> ⚠️ **Experimental:** This application is highly opinionated, and its defaults may not work for you. I am exploring more ergonomic defaults... expect breaking changes.
+> ⚠️ **Experimental:** This application is opinionated, and its defaults may not work for you. I am exploring more ergonomic defaults... expect breaking changes.
 
-# Requirements
+## Requirements
 
 - whisper.cpp ([GitHub](https://github.com/ggml-org/whisper.cpp), [AUR](https://aur.archlinux.org/packages/whisper.cpp))
+- Groq or Gemini API key (optional)
 
-# Built for Hyprland
+## Features
+
+- Fast speach-to-text
+- Intuitive configuration
+  - word overrides
+  - multi provider support
+  - hot reloading during runtime
+
+## Built for Hyprland
 
 - Detects Hyprland via `HYPRLAND_INSTANCE_SIGNATURE` and opens the IPC socket at `$XDG_RUNTIME_DIR/hypr/<signature>/.socket.sock`.
 - Execs `dispatch sendshortcut` commands against the active window to paste dictated text, inspecting `activewindow` to decide when `Shift` is required for a hardcoded list of programs.
 - Falls back to a Wayland virtual keyboard client or a simulated keypress paste if IPC communication fails.
 
-# Example Configuration
+## Development
+
+1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`
+2. `cd hyprwhspr-rs`
+3. `cargo build --release`
+4. Run using:
+    - pretty logs: `RUST_LOG=debug ./target/release/hyprwhspr-rs`
+    - production release: `./target/release/hyprwhspr-rs`
+
+## Example Configuration
 
 ```jsonc
 {
@@ -99,11 +117,10 @@
 }
 ```
 
-# Development
+## To Do
 
-1. `git clone https://github.com/better-slop/hyprwhispr-rs.git`
-2. `cd hyprwhspr-rs`
-3. `cargo build --release`
-4. Run using:
-    - Nice logs with pretty text transformation diffs: `RUST_LOG=debug ./target/release/hyprwhspr-rs`
-    - Production release `./target/release/hyprwhspr-rs`
+- [ ] Ship waybar integration (`hyprwhspr-rs --waybar`)
+- [ ] Release on Cargo
+- [ ] Release on AUR
+- [ ] Add support for other operating systems/setups
+- [ ] Refine paste layer
