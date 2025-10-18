@@ -91,6 +91,15 @@
     // Overlap ratio between segments (seconds). Higher overlap helps smooth transitions at the cost of a little extra decode time.
     "samples_overlap": 0.1,
   },
+  "fast_vad": {
+    "enabled": false, // Enable Earshot-based streaming VAD trimming (requires the fast-vad cargo feature)
+    "profile": "aggressive", // quality | lbr | aggressive | very_aggressive
+    "min_speech_ms": 120, // Frames shorter than this are ignored as noise
+    "silence_timeout_ms": 500, // Drop silence windows longer than this
+    "pre_roll_ms": 120, // Padding added before detected speech
+    "post_roll_ms": 180, // Padding kept after detected speech
+    "volatility_window": 24 // Number of 30 ms frames considered for adaptive aggressiveness
+  },
   "transcription": {
     "provider": "whisper_cpp", // whisper_cpp | groq | gemini
     "request_timeout_secs": 45,
@@ -123,6 +132,38 @@
 ```
 
 </details>
+
+### Fast Earshot VAD (optional)
+
+Hyprwhspr can pre-trim recordings with the [Earshot](https://crates.io/crates/earshot) voice activity detector to minimize upload
+bandwidth and CPU time before hitting whisper.cpp, Groq, or Gemini. The integration is gated behind the `fast-vad` cargo feature
+so downstream packagers can opt in when ready.
+
+1. Build with Earshot enabled: `cargo build --release --features fast-vad`.
+2. Flip the runtime switch in `config.json`:
+
+```jsonc
+"fast_vad": {
+  "enabled": true,
+  "profile": "aggressive", // choose quality | lbr | aggressive | very_aggressive
+  "min_speech_ms": 120,
+  "silence_timeout_ms": 500,
+  "pre_roll_ms": 120,
+  "post_roll_ms": 180,
+  "volatility_window": 24
+}
+```
+
+Earshot runs on 30 ms frames of 16 kHz mono PCM. The capture layer already records at 16 kHz; if a different rate sneaks in, hypr
+whspr will resample before trimming to keep Earshot happy. The adaptive controller starts from the selected profile (default `aggr
+essive`) and expands toward `quality` when the detector chatters, or toward `very_aggressive` when the stream is stable, so you c
+an safely tune for your microphone without constantly flipping configs.
+
+When the trimmer determines the stream is all silence it simply skips provider calls, saving request quota. To compare the Earsh
+ot path against the legacy “send everything” flow, run the included benchmark: `cargo bench --features fast-vad fast_vad`.
+
+> ⚠️ Earshot works best on clean microphone input. If you operate in very noisy environments keep Silero enabled or experiment
+> with the `profile` and timing knobs above.
 
 <details>
   <summary><strong>Release process</strong></summary>

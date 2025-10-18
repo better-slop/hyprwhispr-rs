@@ -7,12 +7,15 @@ use std::thread::{self, JoinHandle};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
-use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
+use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback, CapturedAudio};
 use crate::config::{Config, ConfigManager, ShortcutsConfig};
 use crate::input::{GlobalShortcuts, ShortcutEvent, ShortcutKind, ShortcutPhase, TextInjector};
 use crate::status::StatusWriter;
 use crate::transcription::TranscriptionBackend;
 use crate::whisper::WhisperVadOptions;
+
+#[cfg(feature = "fast-vad")]
+use crate::audio::trim_buffer;
 
 struct ShortcutListener {
     stop_flag: Arc<AtomicBool>,
@@ -409,12 +412,12 @@ impl HyprwhsprApp {
 
         self.status_writer.set_recording(false)?;
 
-        let audio_data = session.stop().context("Failed to stop recording")?;
+        let captured = session.stop().context("Failed to stop recording")?;
         self.recording_trigger = None;
 
-        if !audio_data.is_empty() {
+        if !captured.samples.is_empty() {
             self.is_processing = true;
-            if let Err(e) = self.process_audio(audio_data).await {
+            if let Err(e) = self.process_audio(captured).await {
                 error!("❌ Error processing audio: {:#}", e);
                 // Show user-friendly error notification
                 warn!("Failed to process recording. Check logs for details.");
@@ -427,7 +430,14 @@ impl HyprwhsprApp {
         Ok(())
     }
 
-    async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
+    async fn process_audio(&mut self, captured: CapturedAudio) -> Result<()> {
+        let audio_data = self.prepare_audio(captured)?;
+
+        if audio_data.is_empty() {
+            warn!("Recording contained only silence after trimming; skipping transcription");
+            return Ok(());
+        }
+
         let transcription = self.transcriber.transcribe(audio_data).await?;
 
         if transcription.trim().is_empty() {
@@ -444,6 +454,62 @@ impl HyprwhsprApp {
         injector.inject_text(&transcription).await?;
 
         Ok(())
+    }
+
+    fn prepare_audio(&self, captured: CapturedAudio) -> Result<Vec<f32>> {
+        const TARGET_SAMPLE_RATE: u32 = 16_000;
+
+        let mut samples = captured.samples;
+        if captured.sample_rate != TARGET_SAMPLE_RATE
+            && captured.sample_rate > 0
+            && !samples.is_empty()
+        {
+            debug!(
+                "Resampling audio from {} Hz to {} Hz",
+                captured.sample_rate, TARGET_SAMPLE_RATE
+            );
+            samples = Self::resample_to_16khz(&samples, captured.sample_rate);
+        }
+
+        #[cfg(feature = "fast-vad")]
+        {
+            if self.current_config.fast_vad.enabled {
+                return trim_buffer(&samples, TARGET_SAMPLE_RATE, &self.current_config.fast_vad);
+            }
+        }
+
+        Ok(samples)
+    }
+
+    fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Vec<f32> {
+        const TARGET_SAMPLE_RATE: u32 = 16_000;
+
+        if samples.is_empty() || source_rate == 0 || source_rate == TARGET_SAMPLE_RATE {
+            return samples.to_vec();
+        }
+
+        let ratio = TARGET_SAMPLE_RATE as f64 / source_rate as f64;
+        let new_len = ((samples.len() as f64) * ratio).round() as usize;
+        if new_len == 0 {
+            return Vec::new();
+        }
+
+        let mut output = Vec::with_capacity(new_len);
+        for i in 0..new_len {
+            let src_pos = i as f64 / ratio;
+            let base = src_pos.floor() as usize;
+            let frac = src_pos - base as f64;
+
+            if base + 1 < samples.len() {
+                let a = samples[base];
+                let b = samples[base + 1];
+                output.push(a + (b - a) * frac as f32);
+            } else if let Some(&last) = samples.last() {
+                output.push(last);
+            }
+        }
+
+        output
     }
 
     pub async fn cleanup(&mut self) -> Result<()> {

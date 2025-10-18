@@ -52,13 +52,23 @@ regex = "1"
 similar = "2"
 owo-colors = { version = "4", features = ["supports-colors"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
+earshot = { version = "0.1", optional = true }
 
 [features]
 default = []
 whisper-native = ["whisper-rs"]
+fast-vad = ["dep:earshot"]
+
+[dev-dependencies]
+criterion = "0.5"
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[[bench]]
+name = "fast_vad"
+harness = false
+required-features = ["fast-vad"]

@@ -11,6 +11,12 @@ pub struct AudioCapture {
 pub struct RecordingSession {
     stream: cpal::Stream,
     audio_data: Arc<Mutex<Vec<f32>>>,
+    sample_rate: u32,
+}
+
+pub struct CapturedAudio {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
 }
 
 impl AudioCapture {
@@ -69,7 +75,11 @@ impl AudioCapture {
         let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
         info!("✅ Audio recording started on {}", device_name);
 
-        Ok(RecordingSession { stream, audio_data })
+        Ok(RecordingSession {
+            stream,
+            audio_data,
+            sample_rate: self.sample_rate,
+        })
     }
 
     pub fn get_available_devices() -> Result<Vec<String>> {
@@ -87,7 +97,7 @@ impl AudioCapture {
 }
 
 impl RecordingSession {
-    pub fn stop(self) -> Result<Vec<f32>> {
+    pub fn stop(self) -> Result<CapturedAudio> {
         // Drop the stream (stops recording)
         drop(self.stream);
 
@@ -97,7 +107,11 @@ impl RecordingSession {
             .into_inner()
             .map_err(|_| anyhow::anyhow!("Failed to lock audio data"))?;
 
-        let duration_secs = audio_data.len() as f32 / 16000.0;
+        let duration_secs = if self.sample_rate > 0 {
+            audio_data.len() as f32 / self.sample_rate as f32
+        } else {
+            0.0
+        };
         info!(
             "🛑 Audio recording stopped - captured {} samples ({:.2}s)",
             audio_data.len(),
@@ -108,7 +122,10 @@ impl RecordingSession {
             warn!("No audio data captured");
         }
 
-        Ok(audio_data)
+        Ok(CapturedAudio {
+            samples: audio_data,
+            sample_rate: self.sample_rate,
+        })
     }
 
     pub fn get_current_level(&self) -> f32 {

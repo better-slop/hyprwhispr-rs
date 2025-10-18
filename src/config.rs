@@ -86,6 +86,9 @@ pub struct Config {
     pub vad: VadConfig,
 
     #[serde(default)]
+    pub fast_vad: FastVadConfig,
+
+    #[serde(default)]
     pub transcription: TranscriptionConfig,
 
     #[serde(default, rename = "model", skip_serializing)]
@@ -174,6 +177,34 @@ fn default_vad_samples_overlap() -> f32 {
     0.10
 }
 
+fn default_fast_vad_enabled() -> bool {
+    false
+}
+
+fn default_fast_vad_profile() -> FastVadProfile {
+    FastVadProfile::Aggressive
+}
+
+fn default_fast_vad_min_speech_ms() -> u32 {
+    120
+}
+
+fn default_fast_vad_silence_timeout_ms() -> u32 {
+    500
+}
+
+fn default_fast_vad_pre_roll_ms() -> u32 {
+    120
+}
+
+fn default_fast_vad_post_roll_ms() -> u32 {
+    180
+}
+
+fn default_fast_vad_volatility_window() -> usize {
+    24
+}
+
 fn default_transcription_request_timeout_secs() -> u64 {
     45
 }
@@ -231,6 +262,47 @@ impl Default for VadConfig {
             speech_pad_ms: default_vad_speech_pad_ms(),
             samples_overlap: default_vad_samples_overlap(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FastVadConfig {
+    pub enabled: bool,
+    pub profile: FastVadProfile,
+    pub min_speech_ms: u32,
+    pub silence_timeout_ms: u32,
+    pub pre_roll_ms: u32,
+    pub post_roll_ms: u32,
+    pub volatility_window: usize,
+}
+
+impl Default for FastVadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_fast_vad_enabled(),
+            profile: default_fast_vad_profile(),
+            min_speech_ms: default_fast_vad_min_speech_ms(),
+            silence_timeout_ms: default_fast_vad_silence_timeout_ms(),
+            pre_roll_ms: default_fast_vad_pre_roll_ms(),
+            post_roll_ms: default_fast_vad_post_roll_ms(),
+            volatility_window: default_fast_vad_volatility_window(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FastVadProfile {
+    Quality,
+    Lbr,
+    Aggressive,
+    VeryAggressive,
+}
+
+impl Default for FastVadProfile {
+    fn default() -> Self {
+        FastVadProfile::Aggressive
     }
 }
 
