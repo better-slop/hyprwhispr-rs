@@ -30,6 +30,4 @@ Run the usual quality gates before tagging:
 - `cargo fmt`
 - `cargo clippy --all-targets`
 - `cargo test`
-- `cargo clippy --all-targets --features fast-vad`
-- `cargo test --features fast-vad`
-- `cargo build --release --features fast-vad`
+- `cargo build --release`

@@ -23,7 +23,7 @@
   - word overrides
   - multi provider support
   - hot reloading during runtime
-- Optional Earshot-based fast VAD trimming (compile with `--features fast-vad`)
+- Optional Earshot-based fast VAD trimming (flip `fast_vad.enabled` in config)
 
 ## Built for Hyprland
 
@@ -77,7 +77,7 @@
   },
   "audio_device": null, // Force a specific input device index (null uses system default)
   "fast_vad": {
-    "enabled": false, // Requires building with `--features fast-vad`
+    "enabled": false, // Enable Earshot fast VAD trimming
     "profile": "aggressive", // quality | low_bitrate | aggressive | very_aggressive
     "min_speech_ms": 120, // Minimum detected speech before keeping a segment
     "silence_timeout_ms": 500, // Drop silence longer than this (ms)
@@ -138,19 +138,16 @@
 
 ### Fast Earshot VAD (optional)
 
-When built with `cargo build --release --features fast-vad`, hyprwhspr-rs uses the
-[`earshot`](https://crates.io/crates/earshot) VoiceActivityDetector to trim silence before audio is sent to any
-transcription provider. The feature stays disabled by default so existing installs keep their dependencies stable.
+The default build ships with the [`earshot`](https://crates.io/crates/earshot) VoiceActivityDetector baked in. Toggle
+`fast_vad.enabled` in your config to trim silence before any provider (whisper.cpp, Groq, Gemini) sees the audio.
 
-- Works on 16 kHz mono PCM from the capture layer and shares the trimmed buffer across whisper.cpp, Groq, and Gemini.
+- Operates on the 16 kHz PCM emitted by the capture layer and shares the trimmed buffer across all providers.
 - Drops silent stretches longer than the configured timeout while keeping configurable pre-roll and post-roll padding so
   word edges remain intact.
-- Adapts the underlying Earshot aggressiveness based on recent speech/silence volatility—no more endlessly flapping
-  microphones.
+- Adapts Earshot’s aggressiveness based on recent speech/silence volatility—fewer uploads when the room is noisy.
 - If an entire recording is silent, the app short-circuits the upload path instead of dispatching an empty request.
 
-Enable it by compiling with the `fast-vad` feature flag and toggling the `fast_vad.enabled` switch in your config file.
-All of the other fields under `fast_vad` map directly to the trimmer’s behaviour so you can tune aggressiveness without
+All other fields in the `fast_vad` block map directly to the trimmer’s behaviour, so you can tune aggressiveness without
 recompiling.
 
 <details>

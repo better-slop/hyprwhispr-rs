@@ -1,5 +1,3 @@
-#![cfg(feature = "fast-vad")]
-
 use hyprwhspr_rs::audio::FastVad;
 use hyprwhspr_rs::config::FastVadConfig;
 use std::f32::consts::PI;
@@ -23,9 +21,11 @@ fn tone_ms(duration_ms: u32) -> Vec<f32> {
 
 #[test]
 fn trims_segments_and_preserves_padding() {
-    let mut config = FastVadConfig::default();
-    config.enabled = true;
-    config.min_speech_ms = 90;
+    let config = FastVadConfig {
+        enabled: true,
+        min_speech_ms: 90,
+        ..Default::default()
+    };
 
     let mut vad = FastVad::maybe_new(&config)
         .expect("fast VAD initialization should succeed")
@@ -47,8 +47,10 @@ fn trims_segments_and_preserves_padding() {
 
 #[test]
 fn silence_short_circuits_transmission() {
-    let mut config = FastVadConfig::default();
-    config.enabled = true;
+    let config = FastVadConfig {
+        enabled: true,
+        ..Default::default()
+    };
 
     let mut vad = FastVad::maybe_new(&config)
         .expect("fast VAD initialization should succeed")

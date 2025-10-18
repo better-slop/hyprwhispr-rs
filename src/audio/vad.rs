@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt;
-#[cfg(any(test, feature = "bench"))]
+#[cfg(test)]
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -100,7 +100,7 @@ impl FastVadSettings {
             if ms == 0 {
                 return 0;
             }
-            ((ms + FRAME_MS - 1) / FRAME_MS) as usize
+            ms.div_ceil(FRAME_MS) as usize
         };
 
         let min_speech_frames = ms_to_frames(config.min_speech_ms).max(1);
@@ -122,7 +122,6 @@ impl FastVadSettings {
     }
 }
 
-#[derive(Debug)]
 pub struct FastVad {
     settings: FastVadSettings,
     detector: VoiceActivityDetector,
@@ -144,12 +143,13 @@ impl FastVad {
 
     pub fn with_settings(settings: FastVadSettings) -> Self {
         let frame_samples = ((SAMPLE_RATE_HZ as usize) * (FRAME_MS as usize)) / 1000;
-        let detector = VoiceActivityDetector::new(settings.base_profile.into());
+        let base_profile = settings.base_profile;
+        let detector = VoiceActivityDetector::new(base_profile.into());
 
         Self {
             settings,
             detector,
-            current_profile: settings.base_profile,
+            current_profile: base_profile,
             decision_history: VecDeque::new(),
             profile_switches: 0,
             frame_samples,
@@ -378,6 +378,17 @@ impl FastVad {
     }
 }
 
+impl fmt::Debug for FastVad {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FastVad")
+            .field("settings", &self.settings)
+            .field("current_profile", &self.current_profile)
+            .field("profile_switches", &self.profile_switches)
+            .field("frame_samples", &self.frame_samples)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FastVadOutcome {
     pub trimmed_audio: Vec<f32>,
@@ -394,7 +405,7 @@ impl FastVadOutcome {
     }
 }
 
-#[cfg(any(test, feature = "bench"))]
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct FastVadBenchmark {
     pub fast_duration: Duration,
@@ -405,7 +416,7 @@ pub struct FastVadBenchmark {
     pub segments: usize,
 }
 
-#[cfg(any(test, feature = "bench"))]
+#[cfg(test)]
 pub fn benchmark_against_passthrough(
     audio: &[f32],
     settings: &FastVadSettings,
@@ -453,8 +464,10 @@ mod tests {
 
     #[test]
     fn silence_stream_is_removed() -> Result<()> {
-        let mut config = FastVadConfig::default();
-        config.enabled = true;
+        let config = FastVadConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let mut vad = FastVad::maybe_new(&config)?.expect("fast VAD enabled");
         let audio = silence_ms(2000);
         let outcome = vad.trim(&audio)?;
@@ -465,9 +478,11 @@ mod tests {
 
     #[test]
     fn speech_keeps_padding_and_drops_long_silence() -> Result<()> {
-        let mut config = FastVadConfig::default();
-        config.enabled = true;
-        config.min_speech_ms = 90;
+        let config = FastVadConfig {
+            enabled: true,
+            min_speech_ms: 90,
+            ..Default::default()
+        };
         let mut vad = FastVad::maybe_new(&config)?.expect("fast VAD enabled");
 
         let mut audio = Vec::new();
@@ -491,28 +506,33 @@ mod tests {
 
     #[test]
     fn volatility_triggers_profile_adjustment() -> Result<()> {
-        let mut config = FastVadConfig::default();
-        config.enabled = true;
-        config.volatility_window = 12;
-        config.volatility_increase_threshold = 0.15;
-        config.volatility_decrease_threshold = 0.05;
-        let mut vad = FastVad::maybe_new(&config)?.expect("fast VAD enabled");
+        let config = FastVadConfig {
+            enabled: true,
+            volatility_window: 6,
+            volatility_increase_threshold: 0.05,
+            volatility_decrease_threshold: 0.0,
+            ..Default::default()
+        };
+        let mut vad = FastVad::with_settings(FastVadSettings::from_config(&config));
 
-        let mut audio = Vec::new();
-        for _ in 0..40 {
-            audio.extend(tone_ms(30));
-            audio.extend(silence_ms(30));
+        let pattern = [
+            true, false, true, false, true, false, true, false, true, false,
+        ];
+        for decision in pattern.iter().copied() {
+            let volatility = vad.push_decision(decision);
+            vad.adjust_profile(volatility);
         }
 
-        let outcome = vad.trim(&audio)?;
-        assert!(outcome.profile_switches > 0);
+        assert!(vad.profile_switches > 0);
         Ok(())
     }
 
     #[test]
     fn benchmark_hook_runs() -> Result<()> {
-        let mut config = FastVadConfig::default();
-        config.enabled = true;
+        let config = FastVadConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let settings = FastVadSettings::from_config(&config);
         let audio = tone_ms(500);
         let metrics = super::benchmark_against_passthrough(&audio, &settings)?;

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
-#[cfg(feature = "fast-vad")]
-use crate::audio::{FastVad, FastVadOutcome};
+use crate::audio::{
+    capture::RecordingSession, AudioCapture, AudioFeedback, FastVad, FastVadOutcome,
+};
 use crate::config::{Config, ConfigManager};
 use crate::input::TextInjector;
 use crate::status::StatusWriter;
@@ -18,7 +18,6 @@ pub struct HyprwhsprAppTest {
     audio_capture: AudioCapture,
     audio_feedback: AudioFeedback,
     transcriber: TranscriptionBackend,
-    #[cfg(feature = "fast-vad")]
     fast_vad: Option<FastVad>,
     text_injector: Arc<Mutex<TextInjector>>,
     status_writer: StatusWriter,
@@ -67,7 +66,6 @@ impl HyprwhsprAppTest {
         let status_writer = StatusWriter::new()?;
         status_writer.set_recording(false)?;
 
-        #[cfg(feature = "fast-vad")]
         let fast_vad = FastVad::maybe_new(&config.fast_vad)
             .context("Failed to initialize fast VAD pipeline")?;
 
@@ -76,7 +74,6 @@ impl HyprwhsprAppTest {
             audio_capture,
             audio_feedback,
             transcriber,
-            #[cfg(feature = "fast-vad")]
             fast_vad,
             text_injector: Arc::new(Mutex::new(text_injector)),
             status_writer,
@@ -133,7 +130,6 @@ impl HyprwhsprAppTest {
             self.transcriber = backend;
         }
 
-        #[cfg(feature = "fast-vad")]
         if self.current_config.fast_vad != new_config.fast_vad {
             self.fast_vad = FastVad::maybe_new(&new_config.fast_vad)
                 .context("Failed to refresh fast VAD pipeline")?;
@@ -212,7 +208,6 @@ impl HyprwhsprAppTest {
         Ok(())
     }
 
-    #[cfg(feature = "fast-vad")]
     fn preprocess_audio(&mut self, audio_data: Vec<f32>) -> Result<Option<Vec<f32>>> {
         if let Some(vad) = self.fast_vad.as_mut() {
             let outcome = vad.trim(&audio_data).context("Fast VAD trimming failed")?;
@@ -228,11 +223,6 @@ impl HyprwhsprAppTest {
             return Ok(Some(trimmed_audio));
         }
 
-        Ok(Some(audio_data))
-    }
-
-    #[cfg(not(feature = "fast-vad"))]
-    fn preprocess_audio(&mut self, audio_data: Vec<f32>) -> Result<Option<Vec<f32>>> {
         Ok(Some(audio_data))
     }
 
