@@ -144,38 +144,29 @@ impl HyprlandDispatcher {
     }
 
     async fn active_window_class(&self) -> Result<Option<String>> {
-        const COMMANDS: &[(&str, &str)] =
-            &[("activewindow", "plain"), ("j/activewindow", "legacy-json")];
+        let response = self.send_command("activewindow").await?;
+        let trimmed = response.trim();
 
-        for (command, label) in COMMANDS {
-            let response = self.send_command(command).await?;
-            let trimmed = response.trim();
-
-            if trimmed.is_empty() {
-                debug!(command, "Hyprland activewindow returned empty string");
-                return Ok(None);
-            }
-
-            if trimmed.eq_ignore_ascii_case("unknown request") {
-                debug!(
-                    command,
-                    "Hyprland does not recognize activewindow request variant ({label})"
-                );
-                continue;
-            }
-
-            match Self::extract_window_class_from_response(trimmed) {
-                Ok(class) => return Ok(class),
-                Err(err) => {
-                    debug!(
-                        command,
-                        response, "Hyprland activewindow parse failed via {label}: {err}"
-                    );
-                }
-            }
+        if trimmed.is_empty() {
+            debug!("Hyprland activewindow returned empty string");
+            return Ok(None);
         }
 
-        Ok(None)
+        if trimmed.eq_ignore_ascii_case("unknown request") {
+            debug!("Hyprland does not support activewindow IPC queries on this version");
+            return Ok(None);
+        }
+
+        match Self::extract_window_class_from_response(trimmed) {
+            Ok(class) => Ok(class),
+            Err(err) => {
+                debug!(
+                    response = trimmed,
+                    "Hyprland activewindow parse failed: {err}"
+                );
+                Ok(None)
+            }
+        }
     }
 
     async fn send_command(&self, command: &str) -> Result<String> {
