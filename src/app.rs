@@ -7,6 +7,8 @@ use std::thread::{self, JoinHandle};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
+#[cfg(feature = "fast-vad")]
+use crate::audio::EarshotStreamingTrimmer;
 use crate::audio::{capture::RecordingSession, AudioCapture, AudioFeedback};
 use crate::config::{Config, ConfigManager, ShortcutsConfig};
 use crate::input::{GlobalShortcuts, ShortcutEvent, ShortcutKind, ShortcutPhase, TextInjector};
@@ -428,7 +430,45 @@ impl HyprwhsprApp {
     }
 
     async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
-        let transcription = self.transcriber.transcribe(audio_data).await?;
+        let mut working_audio = audio_data;
+
+        #[cfg(feature = "fast-vad")]
+        {
+            if self.current_config.vad.fast.enabled {
+                let sample_rate = self.audio_capture.sample_rate();
+                let mut trimmer = EarshotStreamingTrimmer::from_config(
+                    &self.current_config.vad.fast,
+                    sample_rate,
+                );
+
+                let original_samples = working_audio.len();
+                let trimmed = trimmer.trim(&working_audio)?;
+
+                if trimmed.is_empty() {
+                    info!("Fast VAD detected only silence — skipping transcription request");
+                    return Ok(());
+                }
+
+                let trimmed_samples = trimmed.len();
+                let original_duration = original_samples as f32 / sample_rate as f32;
+                let trimmed_duration = trimmed_samples as f32 / sample_rate as f32;
+                let retained_ratio = if original_duration > 0.0 {
+                    trimmed_duration / original_duration
+                } else {
+                    0.0
+                };
+                info!(
+                    original_seconds = original_duration,
+                    trimmed_seconds = trimmed_duration,
+                    retained_ratio,
+                    "Fast VAD trimmed recording"
+                );
+
+                working_audio = trimmed;
+            }
+        }
+
+        let transcription = self.transcriber.transcribe(working_audio).await?;
 
         if transcription.trim().is_empty() {
             warn!("Empty transcription, nothing to inject");

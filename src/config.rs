@@ -174,6 +174,42 @@ fn default_vad_samples_overlap() -> f32 {
     0.10
 }
 
+fn default_fast_vad_enabled() -> bool {
+    false
+}
+
+fn default_fast_vad_profile() -> FastVadProfile {
+    FastVadProfile::Aggressive
+}
+
+fn default_fast_vad_min_speech_ms() -> u32 {
+    150
+}
+
+fn default_fast_vad_silence_timeout_ms() -> u32 {
+    500
+}
+
+fn default_fast_vad_pre_roll_ms() -> u32 {
+    120
+}
+
+fn default_fast_vad_post_roll_ms() -> u32 {
+    180
+}
+
+fn default_fast_vad_volatility_window() -> usize {
+    15
+}
+
+fn default_fast_vad_volatility_increase_threshold() -> f32 {
+    0.35
+}
+
+fn default_fast_vad_volatility_decrease_threshold() -> f32 {
+    0.15
+}
+
 fn default_transcription_request_timeout_secs() -> u64 {
     45
 }
@@ -206,6 +242,51 @@ fn default_gemini_max_output_tokens() -> u32 {
     1024
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FastVadProfile {
+    Quality,
+    LowBitrate,
+    Aggressive,
+    VeryAggressive,
+}
+
+impl Default for FastVadProfile {
+    fn default() -> Self {
+        default_fast_vad_profile()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FastVadConfig {
+    pub enabled: bool,
+    pub profile: FastVadProfile,
+    pub min_speech_ms: u32,
+    pub silence_timeout_ms: u32,
+    pub pre_roll_ms: u32,
+    pub post_roll_ms: u32,
+    pub volatility_window: usize,
+    pub volatility_increase_threshold: f32,
+    pub volatility_decrease_threshold: f32,
+}
+
+impl Default for FastVadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_fast_vad_enabled(),
+            profile: default_fast_vad_profile(),
+            min_speech_ms: default_fast_vad_min_speech_ms(),
+            silence_timeout_ms: default_fast_vad_silence_timeout_ms(),
+            pre_roll_ms: default_fast_vad_pre_roll_ms(),
+            post_roll_ms: default_fast_vad_post_roll_ms(),
+            volatility_window: default_fast_vad_volatility_window(),
+            volatility_increase_threshold: default_fast_vad_volatility_increase_threshold(),
+            volatility_decrease_threshold: default_fast_vad_volatility_decrease_threshold(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct VadConfig {
@@ -217,6 +298,7 @@ pub struct VadConfig {
     pub max_speech_s: f32,
     pub speech_pad_ms: u32,
     pub samples_overlap: f32,
+    pub fast: FastVadConfig,
 }
 
 impl Default for VadConfig {
@@ -230,6 +312,7 @@ impl Default for VadConfig {
             max_speech_s: default_vad_max_speech_s(),
             speech_pad_ms: default_vad_speech_pad_ms(),
             samples_overlap: default_vad_samples_overlap(),
+            fast: FastVadConfig::default(),
         }
     }
 }

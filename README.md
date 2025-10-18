@@ -90,6 +90,17 @@
     "speech_pad_ms": 80,
     // Overlap ratio between segments (seconds). Higher overlap helps smooth transitions at the cost of a little extra decode time.
     "samples_overlap": 0.1,
+    "fast": {
+      "enabled": false, // Enable the optional Earshot-based streaming trimmer (requires --features fast-vad)
+      "profile": "aggressive", // aggressive | very_aggressive | quality | low_bitrate
+      "min_speech_ms": 150, // Require this much contiguous speech before we keep a chunk
+      "silence_timeout_ms": 500, // Drop silence windows longer than this (ms)
+      "pre_roll_ms": 120, // Padding inserted before detected speech so words aren't clipped
+      "post_roll_ms": 180, // Padding appended after detected speech to keep trailing consonants
+      "volatility_window": 15, // Number of frames to track when adapting the profile
+      "volatility_increase_threshold": 0.35, // Promote to a more aggressive profile when volatility exceeds this ratio
+      "volatility_decrease_threshold": 0.15 // Relax toward the base profile below this ratio
+    }
   },
   "transcription": {
     "provider": "whisper_cpp", // whisper_cpp | groq | gemini
@@ -123,6 +134,39 @@
 ```
 
 </details>
+
+### Earshot fast VAD (optional)
+
+The `fast-vad` Cargo feature adds a streaming trimmer powered by the [Earshot](https://crates.io/crates/earshot) VAD. It reduces
+upload size for Groq/Gemini and speeds up whisper.cpp by discarding long stretches of silence before encoding.
+
+1. Build with the feature enabled:
+
+   ```bash
+   cargo build --release --features fast-vad
+   ```
+
+2. Toggle the runtime switch in `config.json`:
+
+   ```jsonc
+   "vad": {
+     // ...existing Silero options...
+     "fast": {
+       "enabled": true,
+       "profile": "aggressive", // Start conservative; "very_aggressive" tightens speech detection
+       "silence_timeout_ms": 500, // Works well for clean microphones; raise for noisy rooms
+       "min_speech_ms": 150,
+       "pre_roll_ms": 120,
+       "post_roll_ms": 180
+     }
+   }
+   ```
+
+The adaptive controller bumps the Earshot profile toward `very_aggressive` when frame decisions oscillate, then relaxes back to
+the configured baseline once the input stabilizes. Short pre/post roll padding keeps word edges intact, while a 500 ms silence
+timeout ensures we never upload quiet pauses. The fast path expects 16 kHz mono PCM from the capture stack; the default
+`AudioCapture` already emits the correct format. For best results use a clean microphone and tweak the aggressiveness fields to
+match your environment.
 
 <details>
   <summary><strong>Release process</strong></summary>
