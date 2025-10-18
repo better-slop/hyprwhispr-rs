@@ -1,3 +1,4 @@
+use crate::transcription::DEFAULT_PROMPT;
 use anyhow::{anyhow, Context, Result};
 use jsonc_parser::{parse_to_serde_value, ParseOptions};
 use serde::{Deserialize, Serialize};
@@ -38,20 +39,8 @@ pub struct Config {
     #[serde(default)]
     pub shortcuts: ShortcutsConfig,
 
-    #[serde(default = "default_model")]
-    pub model: String,
-
-    #[serde(default)]
-    pub fallback_cli: bool,
-
-    #[serde(default = "default_threads")]
-    pub threads: usize,
-
     #[serde(default)]
     pub word_overrides: HashMap<String, String>,
-
-    #[serde(default = "default_whisper_prompt")]
-    pub whisper_prompt: String,
 
     #[serde(default)]
     pub audio_feedback: bool,
@@ -77,20 +66,32 @@ pub struct Config {
     #[serde(default)]
     pub audio_device: Option<usize>,
 
-    #[serde(default = "default_gpu_layers")]
-    pub gpu_layers: i32,
-
     #[serde(default)]
     pub vad: VadConfig,
 
-    #[serde(default = "default_no_speech_threshold")]
-    pub no_speech_threshold: f32,
-
-    #[serde(default)]
-    pub models_dirs: Vec<String>,
-
     #[serde(default)]
     pub transcription: TranscriptionConfig,
+
+    #[serde(default, rename = "model", skip_serializing)]
+    legacy_model: Option<String>,
+
+    #[serde(default, rename = "threads", skip_serializing)]
+    legacy_threads: Option<usize>,
+
+    #[serde(default, rename = "gpu_layers", skip_serializing)]
+    legacy_gpu_layers: Option<i32>,
+
+    #[serde(default, rename = "whisper_prompt", skip_serializing)]
+    legacy_whisper_prompt: Option<String>,
+
+    #[serde(default, rename = "models_dirs", skip_serializing)]
+    legacy_models_dirs: Option<Vec<String>>,
+
+    #[serde(default, rename = "no_speech_threshold", skip_serializing)]
+    legacy_no_speech_threshold: Option<f32>,
+
+    #[serde(default, rename = "fallback_cli", skip_serializing)]
+    legacy_fallback_cli: Option<bool>,
 }
 
 fn default_gpu_layers() -> i32 {
@@ -110,7 +111,7 @@ fn default_threads() -> usize {
 }
 
 fn default_whisper_prompt() -> String {
-    "Transcribe with proper capitalization, including sentence beginnings, proper nouns, titles, and standard English capitalization rules.".to_string()
+    DEFAULT_PROMPT.to_string()
 }
 
 fn default_volume() -> f32 {
@@ -220,23 +221,49 @@ impl Default for VadConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptionProvider {
-    Local,
+    WhisperCpp,
     Groq,
     Gemini,
 }
 
 impl Default for TranscriptionProvider {
     fn default() -> Self {
-        TranscriptionProvider::Local
+        TranscriptionProvider::WhisperCpp
     }
 }
 
 impl TranscriptionProvider {
     pub fn label(&self) -> &'static str {
         match self {
-            TranscriptionProvider::Local => "whisper.cpp (local)",
+            TranscriptionProvider::WhisperCpp => "whisper.cpp (local)",
             TranscriptionProvider::Groq => "Groq Whisper API",
             TranscriptionProvider::Gemini => "Gemini 2.5 Pro Flash",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WhisperCppConfig {
+    pub prompt: String,
+    pub model: String,
+    pub threads: usize,
+    pub gpu_layers: i32,
+    pub fallback_cli: bool,
+    pub no_speech_threshold: f32,
+    pub models_dirs: Vec<String>,
+}
+
+impl Default for WhisperCppConfig {
+    fn default() -> Self {
+        Self {
+            prompt: default_whisper_prompt(),
+            model: default_model(),
+            threads: default_threads(),
+            gpu_layers: default_gpu_layers(),
+            fallback_cli: false,
+            no_speech_threshold: default_no_speech_threshold(),
+            models_dirs: Vec::new(),
         }
     }
 }
@@ -246,6 +273,7 @@ impl TranscriptionProvider {
 pub struct GroqConfig {
     pub model: String,
     pub endpoint: String,
+    pub prompt: String,
 }
 
 impl Default for GroqConfig {
@@ -253,6 +281,7 @@ impl Default for GroqConfig {
         Self {
             model: default_groq_model(),
             endpoint: default_groq_endpoint(),
+            prompt: default_whisper_prompt(),
         }
     }
 }
@@ -264,8 +293,7 @@ pub struct GeminiConfig {
     pub endpoint: String,
     pub temperature: f32,
     pub max_output_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
+    pub prompt: String,
 }
 
 impl Default for GeminiConfig {
@@ -275,7 +303,7 @@ impl Default for GeminiConfig {
             endpoint: default_gemini_endpoint(),
             temperature: default_gemini_temperature(),
             max_output_tokens: default_gemini_max_output_tokens(),
-            prompt: None,
+            prompt: default_whisper_prompt(),
         }
     }
 }
@@ -286,6 +314,7 @@ pub struct TranscriptionConfig {
     pub provider: TranscriptionProvider,
     pub request_timeout_secs: u64,
     pub max_retries: u32,
+    pub whisper_cpp: WhisperCppConfig,
     pub groq: GroqConfig,
     pub gemini: GeminiConfig,
 }
@@ -296,6 +325,7 @@ impl Default for TranscriptionConfig {
             provider: TranscriptionProvider::default(),
             request_timeout_secs: default_transcription_request_timeout_secs(),
             max_retries: default_transcription_max_retries(),
+            whisper_cpp: WhisperCppConfig::default(),
             groq: GroqConfig::default(),
             gemini: GeminiConfig::default(),
         }
@@ -307,11 +337,7 @@ impl Default for Config {
         let mut config = Self {
             primary_shortcut: default_primary_shortcut(),
             shortcuts: ShortcutsConfig::default(),
-            model: default_model(),
-            fallback_cli: false,
-            threads: default_threads(),
             word_overrides: HashMap::new(),
-            whisper_prompt: default_whisper_prompt(),
             audio_feedback: false,
             start_sound_volume: default_volume(),
             stop_sound_volume: default_volume(),
@@ -320,11 +346,15 @@ impl Default for Config {
             auto_copy_clipboard: default_auto_copy_clipboard(),
             shift_paste: default_shift_paste(),
             audio_device: None,
-            gpu_layers: default_gpu_layers(),
             vad: VadConfig::default(),
-            no_speech_threshold: default_no_speech_threshold(),
-            models_dirs: Vec::new(),
             transcription: TranscriptionConfig::default(),
+            legacy_model: None,
+            legacy_threads: None,
+            legacy_gpu_layers: None,
+            legacy_whisper_prompt: None,
+            legacy_models_dirs: None,
+            legacy_no_speech_threshold: None,
+            legacy_fallback_cli: None,
         };
         config.normalize_shortcuts();
         config
@@ -362,6 +392,38 @@ impl Config {
             let fallback = legacy_primary.unwrap_or_else(default_primary_shortcut);
             self.primary_shortcut = fallback.clone();
             self.shortcuts.press = Some(fallback);
+        }
+    }
+
+    pub fn migrate_legacy_transcription_settings(&mut self) {
+        if let Some(model) = self.legacy_model.take() {
+            self.transcription.whisper_cpp.model = model;
+        }
+
+        if let Some(threads) = self.legacy_threads.take() {
+            self.transcription.whisper_cpp.threads = threads;
+        }
+
+        if let Some(gpu_layers) = self.legacy_gpu_layers.take() {
+            self.transcription.whisper_cpp.gpu_layers = gpu_layers;
+        }
+
+        if let Some(prompt) = self.legacy_whisper_prompt.take() {
+            self.transcription.whisper_cpp.prompt = prompt.clone();
+            self.transcription.groq.prompt = prompt.clone();
+            self.transcription.gemini.prompt = prompt;
+        }
+
+        if let Some(dirs) = self.legacy_models_dirs.take() {
+            self.transcription.whisper_cpp.models_dirs = dirs;
+        }
+
+        if let Some(threshold) = self.legacy_no_speech_threshold.take() {
+            self.transcription.whisper_cpp.no_speech_threshold = threshold;
+        }
+
+        if let Some(fallback_cli) = self.legacy_fallback_cli.take() {
+            self.transcription.whisper_cpp.fallback_cli = fallback_cli;
         }
     }
 
@@ -586,6 +648,7 @@ impl ConfigManager {
             .ok_or_else(|| anyhow!("Config file did not contain a JSON value"))?;
         let mut config: Config =
             serde_json::from_value(value).context("Failed to deserialize config")?;
+        config.migrate_legacy_transcription_settings();
         config.normalize_shortcuts();
         Ok(config)
     }
@@ -602,7 +665,7 @@ impl ConfigManager {
             .next()
             .unwrap_or_else(|| PathBuf::from("."));
 
-        let model_name = &config.model;
+        let model_name = &config.transcription.whisper_cpp.model;
         if model_name.ends_with(".en") {
             return models_dir.join(format!("ggml-{}.bin", model_name));
         }
@@ -661,7 +724,7 @@ impl ConfigManager {
         let mut dirs = Vec::new();
 
         // Add custom models directories from config (with path expansion)
-        for dir_str in &config.models_dirs {
+        for dir_str in &config.transcription.whisper_cpp.models_dirs {
             let expanded = if dir_str.starts_with("~/") {
                 if let Ok(home) = env::var("HOME") {
                     PathBuf::from(home).join(&dir_str[2..])

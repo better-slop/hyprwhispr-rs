@@ -14,7 +14,7 @@ pub use audio::{encode_to_flac, EncodedAudio};
 pub use gemini::GeminiTranscriber;
 pub use groq::GroqTranscriber;
 pub use postprocess::{clean_transcription, contains_only_non_speech_markers, is_prompt_artifact};
-use prompt::PromptBlueprint;
+pub use prompt::{PromptBlueprint, DEFAULT_PROMPT};
 
 pub enum TranscriptionBackend {
     Whisper(WhisperManager),
@@ -32,17 +32,18 @@ impl TranscriptionBackend {
         let retries = config.transcription.max_retries;
 
         match config.transcription.provider {
-            TranscriptionProvider::Local => {
-                let prompt = Self::prompt_for(config, TranscriptionProvider::Local);
+            TranscriptionProvider::WhisperCpp => {
+                let prompt = Self::prompt_for(config, TranscriptionProvider::WhisperCpp);
+                let whisper_cfg = &config.transcription.whisper_cpp;
                 let manager = WhisperManager::new(
                     config_manager.get_model_path(),
                     config_manager.get_whisper_binary_path(),
-                    config.threads,
+                    whisper_cfg.threads,
                     prompt,
                     config_manager.get_temp_dir(),
-                    config.gpu_layers,
+                    whisper_cfg.gpu_layers,
                     vad,
-                    config.no_speech_threshold,
+                    whisper_cfg.no_speech_threshold,
                 )?;
                 Ok(Self::Whisper(manager))
             }
@@ -85,7 +86,7 @@ impl TranscriptionBackend {
 
     pub fn provider(&self) -> TranscriptionProvider {
         match self {
-            TranscriptionBackend::Whisper(_) => TranscriptionProvider::Local,
+            TranscriptionBackend::Whisper(_) => TranscriptionProvider::WhisperCpp,
             TranscriptionBackend::Groq(_) => TranscriptionProvider::Groq,
             TranscriptionBackend::Gemini(_) => TranscriptionProvider::Gemini,
         }
@@ -97,15 +98,9 @@ impl TranscriptionBackend {
         }
 
         match new.transcription.provider {
-            TranscriptionProvider::Local => {
-                current.model != new.model
-                    || current.threads != new.threads
-                    || current.gpu_layers != new.gpu_layers
-                    || current.vad != new.vad
-                    || (current.no_speech_threshold - new.no_speech_threshold).abs() > f32::EPSILON
-                    || current.models_dirs != new.models_dirs
-                    || Self::prompt_for(current, TranscriptionProvider::Local)
-                        != Self::prompt_for(new, TranscriptionProvider::Local)
+            TranscriptionProvider::WhisperCpp => {
+                current.vad != new.vad
+                    || current.transcription.whisper_cpp != new.transcription.whisper_cpp
             }
             TranscriptionProvider::Groq => {
                 current.transcription.request_timeout_secs != new.transcription.request_timeout_secs
@@ -136,17 +131,15 @@ impl TranscriptionBackend {
 impl TranscriptionBackend {
     fn prompt_for(config: &Config, provider: TranscriptionProvider) -> String {
         match provider {
-            TranscriptionProvider::Local => {
-                PromptBlueprint::new(None, &config.whisper_prompt).resolve()
+            TranscriptionProvider::WhisperCpp => {
+                PromptBlueprint::from(config.transcription.whisper_cpp.prompt.as_str()).resolve()
             }
             TranscriptionProvider::Groq => {
-                PromptBlueprint::new(None, &config.whisper_prompt).resolve()
+                PromptBlueprint::from(config.transcription.groq.prompt.as_str()).resolve()
             }
-            TranscriptionProvider::Gemini => PromptBlueprint::new(
-                config.transcription.gemini.prompt.as_deref(),
-                &config.whisper_prompt,
-            )
-            .resolve(),
+            TranscriptionProvider::Gemini => {
+                PromptBlueprint::from(config.transcription.gemini.prompt.as_str()).resolve()
+            }
         }
     }
 }

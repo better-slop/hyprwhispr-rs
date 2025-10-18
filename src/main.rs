@@ -38,8 +38,11 @@ async fn main() -> Result<()> {
         "   Transcription backend: {}",
         config.transcription.provider.label()
     );
-    if matches!(config.transcription.provider, TranscriptionProvider::Local) {
-        info!("   Model: {}", config.model);
+    if matches!(
+        config.transcription.provider,
+        TranscriptionProvider::WhisperCpp
+    ) {
+        info!("   Model: {}", config.transcription.whisper_cpp.model);
     }
     if let Some(shortcut) = config.press_shortcut() {
         info!("   Press shortcut: {}", shortcut);
@@ -120,7 +123,7 @@ async fn run_test_mode() -> Result<()> {
     let mut config_rx = config_manager.subscribe();
     let config = config_manager.get();
     info!("✅ Configuration loaded");
-    info!("   Model: {}", config.model);
+    info!("   Model: {}", config.transcription.whisper_cpp.model);
     info!("   Audio feedback: {}", config.audio_feedback);
 
     // Initialize application

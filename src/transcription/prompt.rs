@@ -1,14 +1,34 @@
+pub const DEFAULT_PROMPT: &str = "Transcribe with proper capitalization, including sentence beginnings, proper nouns, titles, and standard English capitalization rules.";
+
 pub struct PromptBlueprint<'a> {
-    custom: Option<&'a str>,
+    candidate: Option<&'a str>,
     fallback: &'a str,
 }
 
 impl<'a> PromptBlueprint<'a> {
-    pub fn new(custom: Option<&'a str>, fallback: &'a str) -> Self {
-        Self { custom, fallback }
+    pub fn new(candidate: Option<&'a str>, fallback: &'a str) -> Self {
+        Self {
+            candidate,
+            fallback,
+        }
+    }
+
+    pub fn from(candidate: &'a str) -> Self {
+        Self {
+            candidate: Some(candidate),
+            fallback: DEFAULT_PROMPT,
+        }
+    }
+
+    pub fn with_default(candidate: Option<&'a str>) -> Self {
+        Self {
+            candidate,
+            fallback: DEFAULT_PROMPT,
+        }
     }
 
     pub fn resolve(self) -> String {
-        self.custom.unwrap_or(self.fallback).to_owned()
+        let chosen = self.candidate.unwrap_or(self.fallback);
+        chosen.trim().to_string()
     }
 }
