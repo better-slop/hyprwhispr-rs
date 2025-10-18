@@ -2,18 +2,18 @@ use hyprwhspr_rs::audio::FastVad;
 use hyprwhspr_rs::config::FastVadConfig;
 use std::f32::consts::PI;
 
-const SAMPLE_RATE_HZ: u32 = 16_000;
+const TEST_SAMPLE_RATE_HZ: u32 = 16_000;
 
 fn silence_ms(duration_ms: u32) -> Vec<f32> {
-    let samples = (SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1000) as usize;
+    let samples = (TEST_SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1000) as usize;
     vec![0.0; samples]
 }
 
 fn tone_ms(duration_ms: u32) -> Vec<f32> {
-    let samples = (SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1000) as usize;
+    let samples = (TEST_SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1000) as usize;
     let mut buffer = Vec::with_capacity(samples);
     for n in 0..samples {
-        let phase = (n as f32 / SAMPLE_RATE_HZ as f32) * 2.0 * PI * 440.0;
+        let phase = (n as f32 / TEST_SAMPLE_RATE_HZ as f32) * 2.0 * PI * 440.0;
         buffer.push((phase.sin() * 0.5).clamp(-1.0, 1.0));
     }
     buffer
@@ -27,7 +27,7 @@ fn trims_segments_and_preserves_padding() {
         ..Default::default()
     };
 
-    let mut vad = FastVad::maybe_new(&config)
+    let mut vad = FastVad::maybe_new(&config, TEST_SAMPLE_RATE_HZ)
         .expect("fast VAD initialization should succeed")
         .expect("fast VAD should be enabled");
 
@@ -52,7 +52,7 @@ fn silence_short_circuits_transmission() {
         ..Default::default()
     };
 
-    let mut vad = FastVad::maybe_new(&config)
+    let mut vad = FastVad::maybe_new(&config, TEST_SAMPLE_RATE_HZ)
         .expect("fast VAD initialization should succeed")
         .expect("fast VAD should be enabled");
 

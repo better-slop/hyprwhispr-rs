@@ -23,7 +23,7 @@
   - word overrides
   - multi provider support
   - hot reloading during runtime
-- Optional Earshot-based fast VAD trimming (flip `fast_vad.enabled` in config)
+- Optional fast VAD trims (`fast_vad.enabled`) audio files, reducing inferences costs while increasing output speed
 
 ## Built for Hyprland
 
@@ -78,12 +78,12 @@
   "audio_device": null, // Force a specific input device index (null uses system default)
   "fast_vad": {
     "enabled": false, // Enable Earshot fast VAD trimming
-    "profile": "aggressive", // quality | low_bitrate | aggressive | very_aggressive
+    "profile": "aggressive", // quality | low_bitrate | aggressive | very_aggressive (lowercase only, serde-enforced; default aggressive)
     "min_speech_ms": 120, // Minimum detected speech before keeping a segment
     "silence_timeout_ms": 500, // Drop silence longer than this (ms)
     "pre_roll_ms": 120, // Audio to keep before speech to avoid clipping words
     "post_roll_ms": 150, // Audio to keep after speech before trimming
-    "volatility_window": 24, // Frames observed for adaptive aggressiveness (30 ms per frame)
+    "volatility_window": 24, // Frames observed for adaptive aggressiveness (30 ms per frame, matches FRAME_MS in src/audio/vad.rs)
     "volatility_increase_threshold": 0.35, // Bump profile when toggles exceed this ratio
     "volatility_decrease_threshold": 0.12 // Relax profile when toggles stay below this ratio
   },
@@ -136,7 +136,8 @@
 
 </details>
 
-### Fast Earshot VAD (optional)
+<details>
+  <summary><strong>Earshot VAD trimming</strong> (optional)</summary>
 
 The default build ships with the [`earshot`](https://crates.io/crates/earshot) VoiceActivityDetector baked in. Toggle
 `fast_vad.enabled` in your config to trim silence before any provider (whisper.cpp, Groq, Gemini) sees the audio.
@@ -149,6 +150,8 @@ The default build ships with the [`earshot`](https://crates.io/crates/earshot) V
 
 All other fields in the `fast_vad` block map directly to the trimmer’s behaviour, so you can tune aggressiveness without
 recompiling.
+
+</details>
 
 <details>
   <summary><strong>Release process</strong></summary>

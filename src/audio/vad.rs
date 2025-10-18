@@ -3,13 +3,15 @@ use std::fmt;
 #[cfg(test)]
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use earshot::{VoiceActivityDetector, VoiceActivityProfile};
 
 use crate::config::{FastVadConfig, FastVadProfileConfig};
 
-const SAMPLE_RATE_HZ: u32 = 16_000;
 const FRAME_MS: u32 = 30;
+const SUPPORTED_SAMPLE_RATES: [u32; 4] = [8_000, 16_000, 32_000, 48_000];
+const MIN_VOLATILITY_DELTA: f32 = 0.01;
+const MAX_VOLATILITY_WINDOW: u32 = 480;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FastVadProfile {
@@ -105,9 +107,28 @@ impl FastVadSettings {
 
         let min_speech_frames = ms_to_frames(config.min_speech_ms).max(1);
         let silence_timeout_frames = ms_to_frames(config.silence_timeout_ms).max(1);
-        let pre_roll_frames = ms_to_frames(config.pre_roll_ms);
-        let post_roll_frames = ms_to_frames(config.post_roll_ms);
-        let volatility_window = config.volatility_window.max(2) as usize;
+        let pre_roll_frames = ms_to_frames(config.pre_roll_ms).min(silence_timeout_frames);
+        let post_roll_frames = ms_to_frames(config.post_roll_ms).min(silence_timeout_frames);
+        let volatility_window = config.volatility_window.clamp(2, MAX_VOLATILITY_WINDOW) as usize;
+
+        let mut volatility_increase_threshold =
+            config.volatility_increase_threshold.clamp(0.0, 1.0);
+        let mut volatility_decrease_threshold =
+            config.volatility_decrease_threshold.clamp(0.0, 1.0);
+
+        if volatility_increase_threshold <= volatility_decrease_threshold {
+            let mut adjusted_decrease =
+                volatility_decrease_threshold.min(1.0 - MIN_VOLATILITY_DELTA);
+            let mut adjusted_increase = (adjusted_decrease + MIN_VOLATILITY_DELTA).min(1.0);
+            if adjusted_increase <= adjusted_decrease {
+                adjusted_decrease = (adjusted_decrease - MIN_VOLATILITY_DELTA).max(0.0);
+                adjusted_increase = (adjusted_decrease + MIN_VOLATILITY_DELTA).min(1.0);
+            }
+            volatility_decrease_threshold = adjusted_decrease;
+            volatility_increase_threshold = adjusted_increase
+                .max(volatility_decrease_threshold + f32::EPSILON)
+                .min(1.0);
+        }
 
         Self {
             base_profile: FastVadProfile::from(config.profile),
@@ -116,8 +137,8 @@ impl FastVadSettings {
             pre_roll_frames,
             post_roll_frames,
             volatility_window,
-            volatility_increase_threshold: config.volatility_increase_threshold,
-            volatility_decrease_threshold: config.volatility_decrease_threshold,
+            volatility_increase_threshold,
+            volatility_decrease_threshold,
         }
     }
 }
@@ -129,20 +150,22 @@ pub struct FastVad {
     decision_history: VecDeque<bool>,
     profile_switches: usize,
     frame_samples: usize,
+    sample_rate_hz: u32,
 }
 
 impl FastVad {
-    pub fn maybe_new(config: &FastVadConfig) -> Result<Option<Self>> {
+    pub fn maybe_new(config: &FastVadConfig, sample_rate_hz: u32) -> Result<Option<Self>> {
         if !config.enabled {
             return Ok(None);
         }
 
+        Self::validate_sample_rate(sample_rate_hz)?;
         let settings = FastVadSettings::from_config(config);
-        Ok(Some(Self::with_settings(settings)))
+        Ok(Some(Self::with_settings(settings, sample_rate_hz)))
     }
 
-    pub fn with_settings(settings: FastVadSettings) -> Self {
-        let frame_samples = ((SAMPLE_RATE_HZ as usize) * (FRAME_MS as usize)) / 1000;
+    pub fn with_settings(settings: FastVadSettings, sample_rate_hz: u32) -> Self {
+        let frame_samples = Self::frame_samples(sample_rate_hz);
         let base_profile = settings.base_profile;
         let detector = VoiceActivityDetector::new(base_profile.into());
 
@@ -153,7 +176,39 @@ impl FastVad {
             decision_history: VecDeque::new(),
             profile_switches: 0,
             frame_samples,
+            sample_rate_hz,
         }
+    }
+
+    pub fn supports_sample_rate(sample_rate_hz: u32) -> bool {
+        SUPPORTED_SAMPLE_RATES.contains(&sample_rate_hz)
+    }
+
+    pub fn sample_rate_hz(&self) -> u32 {
+        self.sample_rate_hz
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate_hz: u32) -> Result<()> {
+        Self::validate_sample_rate(sample_rate_hz)?;
+        self.sample_rate_hz = sample_rate_hz;
+        self.frame_samples = Self::frame_samples(sample_rate_hz);
+        Ok(())
+    }
+
+    fn validate_sample_rate(sample_rate_hz: u32) -> Result<()> {
+        if Self::supports_sample_rate(sample_rate_hz) {
+            Ok(())
+        } else {
+            bail!(
+                "Earshot fast VAD supports 8, 16, 32, or 48 kHz input; received {} Hz",
+                sample_rate_hz
+            );
+        }
+    }
+
+    fn frame_samples(sample_rate_hz: u32) -> usize {
+        let numerator = sample_rate_hz as u64 * FRAME_MS as u64;
+        ((numerator + 999) / 1000) as usize
     }
 
     pub fn trim(&mut self, audio: &[f32]) -> Result<FastVadOutcome> {
@@ -187,10 +242,7 @@ impl FastVad {
         for chunk in audio.chunks(self.frame_samples) {
             let frame: Vec<f32> = chunk.to_vec();
             let pcm_frame = Self::convert_frame(&frame, self.frame_samples);
-            let is_speech = self
-                .detector
-                .predict_16khz(&pcm_frame)
-                .context("Earshot VAD failed to evaluate 16 kHz frame")?;
+            let is_speech = self.predict_frame(&pcm_frame)?;
             evaluated_frames += 1;
             let volatility = self.push_decision(is_speech);
             self.adjust_profile(volatility);
@@ -364,6 +416,28 @@ impl FastVad {
         self.settings.min_speech_frames * self.frame_samples
     }
 
+    fn predict_frame(&mut self, frame: &[i16]) -> Result<bool> {
+        match self.sample_rate_hz {
+            8_000 => self
+                .detector
+                .predict_8khz(frame)
+                .context("Earshot VAD failed to evaluate 8 kHz frame"),
+            16_000 => self
+                .detector
+                .predict_16khz(frame)
+                .context("Earshot VAD failed to evaluate 16 kHz frame"),
+            32_000 => self
+                .detector
+                .predict_32khz(frame)
+                .context("Earshot VAD failed to evaluate 32 kHz frame"),
+            48_000 => self
+                .detector
+                .predict_48khz(frame)
+                .context("Earshot VAD failed to evaluate 48 kHz frame"),
+            rate => bail!("Unsupported sample rate {} Hz for fast VAD", rate),
+        }
+    }
+
     fn convert_frame(frame: &[f32], target_len: usize) -> Vec<i16> {
         let mut pcm = Vec::with_capacity(target_len);
         for &sample in frame.iter() {
@@ -385,6 +459,7 @@ impl fmt::Debug for FastVad {
             .field("current_profile", &self.current_profile)
             .field("profile_switches", &self.profile_switches)
             .field("frame_samples", &self.frame_samples)
+            .field("sample_rate_hz", &self.sample_rate_hz)
             .finish()
     }
 }
@@ -423,7 +498,7 @@ pub fn benchmark_against_passthrough(
 ) -> Result<FastVadBenchmark> {
     use std::time::Instant;
 
-    let mut fast_vad = FastVad::with_settings(settings.clone());
+    let mut fast_vad = FastVad::with_settings(settings.clone(), 16_000);
     let fast_start = Instant::now();
     let outcome = fast_vad.trim(audio)?;
     let fast_duration = fast_start.elapsed();
@@ -447,16 +522,19 @@ mod tests {
     use super::*;
     use crate::config::FastVadConfig;
 
+    const TEST_SAMPLE_RATE_HZ: u32 = 16_000;
+
     fn silence_ms(duration_ms: u32) -> Vec<f32> {
-        let samples = (SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1000) as usize;
+        let samples = (TEST_SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1000) as usize;
         vec![0.0; samples]
     }
 
     fn tone_ms(duration_ms: u32) -> Vec<f32> {
-        let samples = (SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1000) as usize;
+        let samples = (TEST_SAMPLE_RATE_HZ as u64 * duration_ms as u64 / 1000) as usize;
         let mut buffer = Vec::with_capacity(samples);
         for n in 0..samples {
-            let phase = (n as f32 / SAMPLE_RATE_HZ as f32) * 2.0 * std::f32::consts::PI * 220.0;
+            let phase =
+                (n as f32 / TEST_SAMPLE_RATE_HZ as f32) * 2.0 * std::f32::consts::PI * 220.0;
             buffer.push((phase.sin() * 0.6).clamp(-1.0, 1.0));
         }
         buffer
@@ -468,7 +546,7 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let mut vad = FastVad::maybe_new(&config)?.expect("fast VAD enabled");
+        let mut vad = FastVad::maybe_new(&config, TEST_SAMPLE_RATE_HZ)?.expect("fast VAD enabled");
         let audio = silence_ms(2000);
         let outcome = vad.trim(&audio)?;
         assert!(outcome.trimmed_audio.is_empty());
@@ -483,7 +561,7 @@ mod tests {
             min_speech_ms: 90,
             ..Default::default()
         };
-        let mut vad = FastVad::maybe_new(&config)?.expect("fast VAD enabled");
+        let mut vad = FastVad::maybe_new(&config, TEST_SAMPLE_RATE_HZ)?.expect("fast VAD enabled");
 
         let mut audio = Vec::new();
         audio.extend(silence_ms(300));
@@ -496,8 +574,8 @@ mod tests {
         assert!(!outcome.trimmed_audio.is_empty());
         assert!(outcome.segments >= 1);
 
-        let trimmed_ms = outcome.trimmed_audio.len() as u64 * 1000 / SAMPLE_RATE_HZ as u64;
-        let original_ms = audio.len() as u64 * 1000 / SAMPLE_RATE_HZ as u64;
+        let trimmed_ms = outcome.trimmed_audio.len() as u64 * 1000 / TEST_SAMPLE_RATE_HZ as u64;
+        let original_ms = audio.len() as u64 * 1000 / TEST_SAMPLE_RATE_HZ as u64;
 
         assert!(trimmed_ms < original_ms);
         assert!(trimmed_ms >= 900);
@@ -513,7 +591,8 @@ mod tests {
             volatility_decrease_threshold: 0.0,
             ..Default::default()
         };
-        let mut vad = FastVad::with_settings(FastVadSettings::from_config(&config));
+        let mut vad =
+            FastVad::with_settings(FastVadSettings::from_config(&config), TEST_SAMPLE_RATE_HZ);
 
         let pattern = [
             true, false, true, false, true, false, true, false, true, false,

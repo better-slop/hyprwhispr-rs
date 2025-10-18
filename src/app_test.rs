@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::audio::{
-    capture::RecordingSession, AudioCapture, AudioFeedback, FastVad, FastVadOutcome,
+    capture::RecordingSession, AudioCapture, AudioFeedback, CapturedAudio, FastVad, FastVadOutcome,
 };
 use crate::config::{Config, ConfigManager};
 use crate::input::TextInjector;
@@ -66,7 +66,7 @@ impl HyprwhsprAppTest {
         let status_writer = StatusWriter::new()?;
         status_writer.set_recording(false)?;
 
-        let fast_vad = FastVad::maybe_new(&config.fast_vad)
+        let fast_vad = FastVad::maybe_new(&config.fast_vad, audio_capture.sample_rate_hint())
             .context("Failed to initialize fast VAD pipeline")?;
 
         Ok(Self {
@@ -131,8 +131,9 @@ impl HyprwhsprAppTest {
         }
 
         if self.current_config.fast_vad != new_config.fast_vad {
-            self.fast_vad = FastVad::maybe_new(&new_config.fast_vad)
-                .context("Failed to refresh fast VAD pipeline")?;
+            self.fast_vad =
+                FastVad::maybe_new(&new_config.fast_vad, self.audio_capture.sample_rate_hint())
+                    .context("Failed to refresh fast VAD pipeline")?;
         }
 
         self.text_injector = Arc::new(Mutex::new(text_injector));
@@ -190,12 +191,12 @@ impl HyprwhsprAppTest {
 
         self.status_writer.set_recording(false)?;
 
-        let audio_data = session.stop().context("Failed to stop recording")?;
+        let captured_audio = session.stop().context("Failed to stop recording")?;
 
-        if !audio_data.is_empty() {
+        if !captured_audio.is_empty() {
             self.is_processing = true;
             info!("🧠 Processing audio...");
-            if let Err(e) = self.process_audio(audio_data).await {
+            if let Err(e) = self.process_audio(captured_audio).await {
                 error!("Error processing audio: {}", e);
             }
             self.is_processing = false;
@@ -208,9 +209,28 @@ impl HyprwhsprAppTest {
         Ok(())
     }
 
-    fn preprocess_audio(&mut self, audio_data: Vec<f32>) -> Result<Option<Vec<f32>>> {
+    fn preprocess_audio(&mut self, audio_data: CapturedAudio) -> Result<Option<CapturedAudio>> {
+        let CapturedAudio {
+            mut samples,
+            mut sample_rate,
+        } = audio_data;
+
         if let Some(vad) = self.fast_vad.as_mut() {
-            let outcome = vad.trim(&audio_data).context("Fast VAD trimming failed")?;
+            if !FastVad::supports_sample_rate(sample_rate) {
+                warn!(
+                    "🎚️ Input sample rate {} Hz unsupported by fast VAD; resampling to 16 kHz (test mode)",
+                    sample_rate
+                );
+                samples = resample_audio(&samples, sample_rate, 16_000);
+                sample_rate = 16_000;
+            }
+
+            if vad.sample_rate_hz() != sample_rate {
+                vad.set_sample_rate(sample_rate)
+                    .context("Failed to configure fast VAD sample rate")?;
+            }
+
+            let outcome = vad.trim(&samples).context("Fast VAD trimming failed")?;
             if outcome.trimmed_audio.is_empty() {
                 info!(
                     "🎧 Recording contained only silence after fast VAD trimming; skipping transcription"
@@ -220,23 +240,44 @@ impl HyprwhsprAppTest {
 
             let FastVadOutcome { trimmed_audio, .. } = outcome;
 
-            return Ok(Some(trimmed_audio));
+            return Ok(Some(CapturedAudio {
+                samples: trimmed_audio,
+                sample_rate,
+            }));
         }
 
-        Ok(Some(audio_data))
+        Ok(Some(CapturedAudio {
+            samples,
+            sample_rate,
+        }))
     }
 
-    async fn process_audio(&mut self, audio_data: Vec<f32>) -> Result<()> {
+    async fn process_audio(&mut self, audio_data: CapturedAudio) -> Result<()> {
         let maybe_audio = self.preprocess_audio(audio_data)?;
 
-        let Some(audio_for_transcription) = maybe_audio else {
+        let Some(processed_audio) = maybe_audio else {
             return Ok(());
         };
 
-        if audio_for_transcription.is_empty() {
+        if processed_audio.is_empty() {
             info!("🎧 No audio remaining after preprocessing; skipping transcription");
             return Ok(());
         }
+
+        let CapturedAudio {
+            samples,
+            sample_rate,
+        } = processed_audio;
+
+        let audio_for_transcription = if sample_rate == 16_000 {
+            samples
+        } else {
+            debug!(
+                "Resampling processed audio from {} Hz to 16 kHz for transcription backend (test mode)",
+                sample_rate
+            );
+            resample_audio(&samples, sample_rate, 16_000)
+        };
 
         let transcription = self.transcriber.transcribe(audio_for_transcription).await?;
 
@@ -268,6 +309,41 @@ impl HyprwhsprAppTest {
         info!("✅ Cleanup completed");
         Ok(())
     }
+}
+
+fn resample_audio(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    if samples.is_empty() || src_rate == 0 || dst_rate == 0 {
+        return Vec::new();
+    }
+    if src_rate == dst_rate {
+        return samples.to_vec();
+    }
+
+    let src_len = samples.len();
+    if src_len == 0 {
+        return Vec::new();
+    }
+
+    let output_len = ((src_len as u64 * dst_rate as u64) + (src_rate as u64 / 2)) / src_rate as u64;
+    if output_len == 0 {
+        return Vec::new();
+    }
+
+    let mut output = Vec::with_capacity(output_len as usize);
+    let rate_ratio = src_rate as f64 / dst_rate as f64;
+    let last_index = src_len.saturating_sub(1);
+
+    for n in 0..output_len as usize {
+        let src_pos = n as f64 * rate_ratio;
+        let idx = src_pos.floor() as usize;
+        let frac = src_pos - idx as f64;
+        let left = samples[idx.min(last_index)];
+        let right = samples[(idx + 1).min(last_index)];
+        let value = left + (right - left) * frac as f32;
+        output.push(value);
+    }
+
+    output
 }
 
 fn build_vad_options(config_manager: &ConfigManager, config: &Config) -> WhisperVadOptions {
