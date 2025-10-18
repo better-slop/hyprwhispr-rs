@@ -11,10 +11,12 @@
 
 - whisper.cpp ([GitHub](https://github.com/ggml-org/whisper.cpp), [AUR](https://aur.archlinux.org/packages/whisper.cpp))
 - Groq or Gemini API key (optional)
+  - Groq is cheap and fast as hell. Advanced/pretty formatting not included.
+  - Slow, but much better output formatting.
 
 ## Features
 
-- Fast speach-to-text
+- Fast speech-to-text
 - Intuitive configuration
   - word overrides
   - multi provider support
@@ -124,3 +126,4 @@
 - [ ] Release on AUR
 - [ ] Add support for other operating systems/setups
 - [ ] Refine paste layer
+- [ ] Investigate formatting model
