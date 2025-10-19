@@ -302,7 +302,7 @@ impl fmt::Display for BenchmarkSummary {
 
         table.set_header(vec![
             Cell::new(format!("Benchmark · {}", self.provider_label)),
-            Cell::new("Duration (ms)"),
+            Cell::new("DUR (ms)"),
             Cell::new("Audio (ms)"),
             Cell::new("Audio (KB)"),
         ]);
@@ -314,7 +314,7 @@ impl fmt::Display for BenchmarkSummary {
         }
 
         table.add_row(Row::from(vec![
-            Cell::new("Keybind → Record Start"),
+            Cell::new("Recording (start)"),
             ms_cell(Some(self.keybind_to_record_start_ms)),
             empty_cell(),
             empty_cell(),
@@ -328,7 +328,7 @@ impl fmt::Display for BenchmarkSummary {
         ]));
 
         table.add_row(Row::from(vec![
-            Cell::new("Stop → Processing"),
+            Cell::new("Processing"),
             ms_cell(self.stop_to_processing_ms),
             empty_cell(),
             empty_cell(),
@@ -377,7 +377,7 @@ impl fmt::Display for BenchmarkSummary {
         ]));
 
         table.add_row(Row::from(vec![
-            Cell::new("Total Keybind → Text"),
+            Cell::new("Total"),
             ms_cell(Some(self.total_ms)),
             empty_cell(),
             empty_cell(),

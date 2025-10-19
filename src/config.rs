@@ -327,9 +327,9 @@ impl Default for TranscriptionProvider {
 impl TranscriptionProvider {
     pub fn label(&self) -> &'static str {
         match self {
-            TranscriptionProvider::WhisperCpp => "whisper.cpp (local)",
-            TranscriptionProvider::Groq => "Groq Whisper API",
-            TranscriptionProvider::Gemini => "Gemini 2.5 Pro Flash",
+            TranscriptionProvider::WhisperCpp => "Local",
+            TranscriptionProvider::Groq => "Groq",
+            TranscriptionProvider::Gemini => "Gemini",
         }
     }
 }
