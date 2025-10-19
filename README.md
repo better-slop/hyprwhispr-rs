@@ -20,7 +20,7 @@
 
 - Fast speech-to-text
 - Intuitive configuration
-  - word overrides
+  - word overrides ([many are already baked in](https://github.com/better-slop/hyprwhspr-rs/blob/58f192b5a69a3d334b9a3d547b3ef5dd350c8678/src/input/injector.rs#L423-L639))
   - multi provider support
   - hot reloading during runtime
 - Optional fast VAD trims (`fast_vad.enabled`) audio files, reducing inferences costs while increasing output speed
