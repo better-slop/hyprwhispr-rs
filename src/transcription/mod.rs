@@ -22,6 +22,21 @@ pub enum TranscriptionBackend {
     Gemini(GeminiTranscriber),
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct BackendMetrics {
+    pub encode_duration: Option<Duration>,
+    pub encoded_bytes: Option<usize>,
+    pub upload_duration: Option<Duration>,
+    pub response_duration: Option<Duration>,
+    pub transcription_duration: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct TranscriptionResult {
+    pub text: String,
+    pub metrics: BackendMetrics,
+}
+
 impl TranscriptionBackend {
     pub fn build(
         config_manager: &ConfigManager,
@@ -119,7 +134,7 @@ impl TranscriptionBackend {
         }
     }
 
-    pub async fn transcribe(&self, audio_data: Vec<f32>) -> Result<String> {
+    pub async fn transcribe(&self, audio_data: Vec<f32>) -> Result<TranscriptionResult> {
         match self {
             TranscriptionBackend::Whisper(manager) => manager.transcribe(audio_data).await,
             TranscriptionBackend::Groq(provider) => provider.transcribe(audio_data).await,

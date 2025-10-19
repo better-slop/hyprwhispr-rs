@@ -53,6 +53,7 @@ regex = "1"
 similar = "2"
 owo-colors = { version = "4", features = ["supports-colors"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
+comfy-table = { version = "7.2", default-features = true, features = ["tty"] }
 
 [features]
 default = []

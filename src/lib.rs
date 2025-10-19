@@ -1,6 +1,7 @@
 pub mod app;
 pub mod app_test;
 pub mod audio;
+pub mod benchmark;
 pub mod config;
 pub mod input;
 pub mod logging;
