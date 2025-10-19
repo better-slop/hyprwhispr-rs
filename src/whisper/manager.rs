@@ -1,8 +1,12 @@
-use crate::transcription::{clean_transcription, contains_only_non_speech_markers};
+use crate::transcription::{
+    clean_transcription, contains_only_non_speech_markers, BackendMetrics, TranscriptionResult,
+};
 use anyhow::{Context, Result};
+use std::convert::TryFrom;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Instant;
 use tracing::{debug, info, trace, warn};
 
 #[derive(Debug, Clone)]
@@ -132,9 +136,12 @@ impl WhisperManager {
         "CPU only (no GPU detected)".to_string()
     }
 
-    pub async fn transcribe(&self, audio_data: Vec<f32>) -> Result<String> {
+    pub async fn transcribe(&self, audio_data: Vec<f32>) -> Result<TranscriptionResult> {
         if audio_data.is_empty() {
-            return Ok(String::new());
+            return Ok(TranscriptionResult {
+                text: String::new(),
+                metrics: BackendMetrics::default(),
+            });
         }
 
         let duration_secs = audio_data.len() as f32 / 16000.0;
@@ -144,17 +151,32 @@ impl WhisperManager {
         let temp_wav = self
             .temp_dir
             .join(format!("audio_{}.wav", std::process::id()));
+        let encode_start = Instant::now();
         self.save_audio_as_wav(&audio_data, &temp_wav)?;
+        let encode_duration = encode_start.elapsed();
+        let encoded_bytes = fs::metadata(&temp_wav)
+            .ok()
+            .and_then(|meta| usize::try_from(meta.len()).ok());
 
         debug!("Saved audio to: {:?}", temp_wav);
 
         // Run whisper.cpp CLI
+        let transcribe_start = Instant::now();
         let transcription = self.run_whisper_cli(&temp_wav).await?;
+        let transcription_duration = transcribe_start.elapsed();
         let trimmed = transcription.trim();
         let cleaned_transcription = clean_transcription(trimmed, &self.whisper_prompt);
 
         // Always clean up after successful transcription pass
         let _ = fs::remove_file(&temp_wav);
+
+        let metrics = BackendMetrics {
+            encode_duration: Some(encode_duration),
+            encoded_bytes,
+            upload_duration: None,
+            response_duration: None,
+            transcription_duration,
+        };
 
         if cleaned_transcription.is_empty() {
             if trimmed.is_empty() {
@@ -167,7 +189,10 @@ impl WhisperManager {
                     trimmed
                 );
             }
-            return Ok(String::new());
+            return Ok(TranscriptionResult {
+                text: String::new(),
+                metrics,
+            });
         }
 
         if cleaned_transcription != trimmed {
@@ -178,7 +203,10 @@ impl WhisperManager {
         }
         info!("✅ Transcription: {}", cleaned_transcription);
 
-        Ok(cleaned_transcription)
+        Ok(TranscriptionResult {
+            text: cleaned_transcription,
+            metrics,
+        })
     }
 
     fn save_audio_as_wav(&self, audio_data: &[f32], path: &PathBuf) -> Result<()> {

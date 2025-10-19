@@ -1,7 +1,10 @@
 use owo_colors::OwoColorize;
 use serde::{Deserialize, Serialize};
 use similar::{ChangeTag, TextDiff};
-use std::fmt;
+use std::{
+    fmt,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use time::{format_description::FormatItem, macros::format_description, OffsetDateTime};
 use tracing::{Level, Subscriber};
 use tracing_subscriber::{
@@ -15,6 +18,8 @@ const PREVIEW_CHAR_LIMIT: usize = 160;
 const TARGET_GUTTER_WIDTH: usize = 28;
 const TIMESTAMP_FORMAT: &[FormatItem<'_>] =
     format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+
+static LOGS_USE_COLOR: AtomicBool = AtomicBool::new(true);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextPipelineRecord {
@@ -259,6 +264,8 @@ where
         let metadata = event.metadata();
         let use_color = writer.has_ansi_escapes();
 
+        LOGS_USE_COLOR.store(use_color, Ordering::Relaxed);
+
         write_prefix(&mut writer, metadata, use_color)?;
         ctx.format_fields(writer.by_ref(), event)?;
         writer.write_char('\n')?;
@@ -305,6 +312,10 @@ pub fn record_text_pipeline(record: TextPipelineRecord) {
             "text transformation pipeline (serialization failure)"
         );
     }
+}
+
+pub fn logs_use_color() -> bool {
+    LOGS_USE_COLOR.load(Ordering::Relaxed)
 }
 
 fn write_prefix(

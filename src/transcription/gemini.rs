@@ -1,13 +1,14 @@
 use crate::config::GeminiConfig;
 use crate::transcription::audio::{encode_to_flac, EncodedAudio};
 use crate::transcription::postprocess::clean_transcription;
+use crate::transcription::{BackendMetrics, TranscriptionResult};
 use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use std::cmp;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -76,9 +77,12 @@ impl GeminiTranscriber {
         "Gemini 2.5 Pro Flash"
     }
 
-    pub async fn transcribe(&self, audio_data: Vec<f32>) -> Result<String> {
+    pub async fn transcribe(&self, audio_data: Vec<f32>) -> Result<TranscriptionResult> {
         if audio_data.is_empty() {
-            return Ok(String::new());
+            return Ok(TranscriptionResult {
+                text: String::new(),
+                metrics: BackendMetrics::default(),
+            });
         }
 
         let duration_secs = audio_data.len() as f32 / 16000.0;
@@ -87,9 +91,15 @@ impl GeminiTranscriber {
             "🧠 Transcribing {:.2}s of audio via Gemini", duration_secs
         );
 
+        let encode_start = Instant::now();
         let encoded = encode_to_flac(&audio_data).await?;
         let audio_payload = BASE64.encode(encoded.data.as_ref());
-        let raw = self.send_with_retry(&encoded, &audio_payload).await?;
+        let encode_duration = encode_start.elapsed();
+        let payload_bytes = audio_payload.len();
+
+        let transcribe_start = Instant::now();
+        let (raw, timings) = self.send_with_retry(&encoded, &audio_payload).await?;
+        let transcription_duration = transcribe_start.elapsed();
         let cleaned = clean_transcription(&raw, &self.prompt);
 
         if cleaned.is_empty() {
@@ -98,15 +108,30 @@ impl GeminiTranscriber {
             info!("✅ Transcription (Gemini): {}", cleaned);
         }
 
-        Ok(cleaned)
+        let metrics = BackendMetrics {
+            encode_duration: Some(encode_duration),
+            encoded_bytes: Some(payload_bytes),
+            upload_duration: Some(timings.upload),
+            response_duration: Some(timings.response),
+            transcription_duration,
+        };
+
+        Ok(TranscriptionResult {
+            text: cleaned,
+            metrics,
+        })
     }
 
-    async fn send_with_retry(&self, audio: &EncodedAudio, payload: &str) -> Result<String> {
+    async fn send_with_retry(
+        &self,
+        audio: &EncodedAudio,
+        payload: &str,
+    ) -> Result<(String, NetworkTimings)> {
         let attempts = cmp::max(1, self.max_retries.saturating_add(1));
 
         for attempt in 0..attempts {
             match self.send_once(audio, payload).await {
-                Ok(text) => return Ok(text),
+                Ok(result) => return Ok(result),
                 Err(err) => {
                     if attempt + 1 == attempts {
                         return Err(err);
@@ -128,7 +153,11 @@ impl GeminiTranscriber {
         Err(anyhow::anyhow!("Unknown Gemini transcription failure"))
     }
 
-    async fn send_once(&self, audio: &EncodedAudio, payload: &str) -> Result<String> {
+    async fn send_once(
+        &self,
+        audio: &EncodedAudio,
+        payload: &str,
+    ) -> Result<(String, NetworkTimings)> {
         let mut url = self.endpoint.clone();
         url.query_pairs_mut().append_pair("key", &self.api_key);
 
@@ -153,6 +182,7 @@ impl GeminiTranscriber {
             },
         };
 
+        let request_start = Instant::now();
         let response = self
             .client
             .post(url)
@@ -161,13 +191,23 @@ impl GeminiTranscriber {
             .await
             .context("Failed to send Gemini transcription request")?;
 
+        let upload_duration = request_start.elapsed();
+
         if response.status().is_success() {
+            let parse_start = Instant::now();
             let payload: GeminiResponse = response
                 .json()
                 .await
                 .context("Failed to deserialize Gemini transcription response")?;
+            let response_duration = parse_start.elapsed();
             let text = extract_text(payload).unwrap_or_default();
-            return Ok(text);
+            return Ok((
+                text,
+                NetworkTimings {
+                    upload: upload_duration,
+                    response: response_duration,
+                },
+            ));
         }
 
         let status = response.status();
@@ -182,6 +222,12 @@ impl GeminiTranscriber {
 
         Err(anyhow::anyhow!(message).context(format!("Gemini request failed ({status})")))
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NetworkTimings {
+    upload: Duration,
+    response: Duration,
 }
 
 fn build_instruction(prompt: &str) -> String {

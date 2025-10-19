@@ -1,11 +1,12 @@
 use crate::config::GroqConfig;
 use crate::transcription::audio::{encode_to_flac, EncodedAudio};
 use crate::transcription::postprocess::clean_transcription;
+use crate::transcription::{BackendMetrics, TranscriptionResult};
 use anyhow::{Context, Result};
 use reqwest::{multipart, Client, Url};
 use serde::Deserialize;
 use std::cmp;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -66,9 +67,12 @@ impl GroqTranscriber {
         "Groq Whisper"
     }
 
-    pub async fn transcribe(&self, audio_data: Vec<f32>) -> Result<String> {
+    pub async fn transcribe(&self, audio_data: Vec<f32>) -> Result<TranscriptionResult> {
         if audio_data.is_empty() {
-            return Ok(String::new());
+            return Ok(TranscriptionResult {
+                text: String::new(),
+                metrics: BackendMetrics::default(),
+            });
         }
 
         let duration_secs = audio_data.len() as f32 / 16000.0;
@@ -77,8 +81,14 @@ impl GroqTranscriber {
             "🧠 Transcribing {:.2}s of audio via Groq", duration_secs
         );
 
+        let encode_start = Instant::now();
         let encoded = encode_to_flac(&audio_data).await?;
-        let raw = self.send_with_retry(&encoded).await?;
+        let encode_duration = encode_start.elapsed();
+        let encoded_len = encoded.data.len();
+
+        let transcribe_start = Instant::now();
+        let (raw, timings) = self.send_with_retry(&encoded).await?;
+        let transcription_duration = transcribe_start.elapsed();
         let cleaned = clean_transcription(&raw, &self.prompt);
 
         if cleaned.is_empty() {
@@ -87,15 +97,26 @@ impl GroqTranscriber {
             info!("✅ Transcription (Groq): {}", cleaned);
         }
 
-        Ok(cleaned)
+        let metrics = BackendMetrics {
+            encode_duration: Some(encode_duration),
+            encoded_bytes: Some(encoded_len),
+            upload_duration: Some(timings.upload),
+            response_duration: Some(timings.response),
+            transcription_duration,
+        };
+
+        Ok(TranscriptionResult {
+            text: cleaned,
+            metrics,
+        })
     }
 
-    async fn send_with_retry(&self, audio: &EncodedAudio) -> Result<String> {
+    async fn send_with_retry(&self, audio: &EncodedAudio) -> Result<(String, NetworkTimings)> {
         let attempts = cmp::max(1, self.max_retries.saturating_add(1));
 
         for attempt in 0..attempts {
             match self.send_once(audio).await {
-                Ok(text) => return Ok(text),
+                Ok(result) => return Ok(result),
                 Err(err) => {
                     let is_last_attempt = attempt + 1 == attempts;
                     if is_last_attempt {
@@ -118,7 +139,7 @@ impl GroqTranscriber {
         Err(anyhow::anyhow!("Unknown Groq transcription failure"))
     }
 
-    async fn send_once(&self, audio: &EncodedAudio) -> Result<String> {
+    async fn send_once(&self, audio: &EncodedAudio) -> Result<(String, NetworkTimings)> {
         let mut form = multipart::Form::new()
             .text("model", self.model.clone())
             .text("response_format", "json".to_string())
@@ -135,6 +156,7 @@ impl GroqTranscriber {
 
         form = form.part("file", file_part);
 
+        let request_start = Instant::now();
         let response = self
             .client
             .post(self.endpoint.clone())
@@ -144,12 +166,22 @@ impl GroqTranscriber {
             .await
             .context("Failed to send Groq transcription request")?;
 
+        let upload_duration = request_start.elapsed();
+
         if response.status().is_success() {
+            let parse_start = Instant::now();
             let payload: GroqTranscriptionResponse = response
                 .json()
                 .await
                 .context("Failed to deserialize Groq transcription response")?;
-            return Ok(payload.text.unwrap_or_default());
+            let response_duration = parse_start.elapsed();
+            return Ok((
+                payload.text.unwrap_or_default(),
+                NetworkTimings {
+                    upload: upload_duration,
+                    response: response_duration,
+                },
+            ));
         }
 
         let status = response.status();
@@ -165,6 +197,12 @@ impl GroqTranscriber {
 
         Err(anyhow::anyhow!(message).context(format!("Groq request failed ({status})")))
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NetworkTimings {
+    upload: Duration,
+    response: Duration,
 }
 
 #[derive(Debug, Deserialize, Default)]

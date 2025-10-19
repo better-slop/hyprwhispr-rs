@@ -4,16 +4,18 @@ use std::sync::{
     Arc,
 };
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::audio::{
     capture::RecordingSession, AudioCapture, AudioFeedback, CapturedAudio, FastVad, FastVadOutcome,
 };
+use crate::benchmark::BenchmarkRecorder;
 use crate::config::{Config, ConfigManager, ShortcutsConfig};
 use crate::input::{GlobalShortcuts, ShortcutEvent, ShortcutKind, ShortcutPhase, TextInjector};
 use crate::status::StatusWriter;
-use crate::transcription::TranscriptionBackend;
+use crate::transcription::{TranscriptionBackend, TranscriptionResult};
 use crate::whisper::WhisperVadOptions;
 
 struct ShortcutListener {
@@ -125,6 +127,18 @@ enum RecordingTrigger {
     PressShortcut,
 }
 
+#[derive(Debug, Clone)]
+struct FastVadSummary {
+    dropped_samples: usize,
+    sample_rate: u32,
+}
+
+#[derive(Debug)]
+struct PreprocessedAudio {
+    audio: CapturedAudio,
+    report: Option<FastVadSummary>,
+}
+
 fn build_vad_options(config_manager: &ConfigManager, config: &Config) -> WhisperVadOptions {
     WhisperVadOptions {
         enabled: config.vad.enabled,
@@ -153,6 +167,7 @@ pub struct HyprwhsprApp {
     current_config: Config,
     recording_session: Option<RecordingSession>,
     recording_trigger: Option<RecordingTrigger>,
+    benchmark: Option<BenchmarkRecorder>,
     is_processing: bool,
 }
 
@@ -224,6 +239,7 @@ impl HyprwhsprApp {
             current_config: config,
             recording_session: None,
             recording_trigger: None,
+            benchmark: None,
             is_processing: false,
         })
     }
@@ -411,9 +427,9 @@ impl HyprwhsprApp {
                 }
 
                 if self.recording_session.is_some() {
-                    self.stop_recording().await?;
+                    self.stop_recording(event.triggered_at).await?;
                 } else {
-                    self.start_recording(RecordingTrigger::PressShortcut)
+                    self.start_recording(RecordingTrigger::PressShortcut, event.triggered_at)
                         .await?;
                 }
             }
@@ -426,14 +442,15 @@ impl HyprwhsprApp {
                 if self.recording_session.is_some() {
                     debug!("Hold shortcut ignored because recording is already active");
                 } else {
-                    self.start_recording(RecordingTrigger::HoldShortcut).await?;
+                    self.start_recording(RecordingTrigger::HoldShortcut, event.triggered_at)
+                        .await?;
                 }
             }
             (ShortcutKind::Hold, ShortcutPhase::End) => {
                 if matches!(self.recording_trigger, Some(RecordingTrigger::HoldShortcut))
                     && self.recording_session.is_some()
                 {
-                    self.stop_recording().await?;
+                    self.stop_recording(event.triggered_at).await?;
                 } else {
                     debug!("Hold release ignored (no active hold-triggered recording)");
                 }
@@ -444,7 +461,11 @@ impl HyprwhsprApp {
         Ok(())
     }
 
-    async fn start_recording(&mut self, trigger: RecordingTrigger) -> Result<()> {
+    async fn start_recording(
+        &mut self,
+        trigger: RecordingTrigger,
+        triggered_at: Instant,
+    ) -> Result<()> {
         info!("🎤 Starting recording...");
 
         self.audio_feedback.play_start_sound()?;
@@ -457,12 +478,19 @@ impl HyprwhsprApp {
         self.recording_session = Some(session);
         self.recording_trigger = Some(trigger);
 
+        let recording_started_at = Instant::now();
+        self.benchmark = Some(BenchmarkRecorder::new(
+            self.transcriber.provider().label().to_string(),
+            triggered_at,
+            recording_started_at,
+        ));
+
         self.status_writer.set_recording(true)?;
 
         Ok(())
     }
 
-    async fn stop_recording(&mut self) -> Result<()> {
+    async fn stop_recording(&mut self, triggered_at: Instant) -> Result<()> {
         info!("🛑 Stopping recording...");
 
         let session = self
@@ -470,12 +498,22 @@ impl HyprwhsprApp {
             .take()
             .context("No active recording session")?;
 
+        if let Some(benchmark) = self.benchmark.as_mut() {
+            benchmark.mark_keybind_stop(triggered_at);
+        }
+
         self.audio_feedback.play_stop_sound()?;
 
         self.status_writer.set_recording(false)?;
 
         let captured_audio = session.stop().context("Failed to stop recording")?;
+        let stop_timestamp = Instant::now();
         self.recording_trigger = None;
+
+        if let Some(benchmark) = self.benchmark.as_mut() {
+            benchmark.mark_recording_stop(stop_timestamp);
+            benchmark.record_original_audio(captured_audio.len(), captured_audio.sample_rate);
+        }
 
         if !captured_audio.is_empty() {
             self.is_processing = true;
@@ -484,15 +522,17 @@ impl HyprwhsprApp {
                 // Show user-friendly error notification
                 warn!("Failed to process recording. Check logs for details.");
             }
+            self.benchmark = None;
             self.is_processing = false;
         } else {
             warn!("No audio data captured");
+            self.benchmark = None;
         }
 
         Ok(())
     }
 
-    fn preprocess_audio(&mut self, audio_data: CapturedAudio) -> Result<Option<CapturedAudio>> {
+    fn preprocess_audio(&mut self, audio_data: CapturedAudio) -> Result<Option<PreprocessedAudio>> {
         let CapturedAudio {
             mut samples,
             mut sample_rate,
@@ -530,9 +570,11 @@ impl HyprwhsprApp {
                 ..
             } = outcome;
 
+            let trimmed_len = trimmed_audio.len();
+
             debug!(
                 "Earshot fast VAD kept {}/{} samples across {} segments (profile={}, switches={}, dropped={})",
-                trimmed_audio.len(),
+                trimmed_len,
                 samples.len(),
                 segments,
                 final_profile,
@@ -540,34 +582,76 @@ impl HyprwhsprApp {
                 dropped_samples
             );
 
-            return Ok(Some(CapturedAudio {
-                samples: trimmed_audio,
-                sample_rate,
+            return Ok(Some(PreprocessedAudio {
+                audio: CapturedAudio {
+                    samples: trimmed_audio,
+                    sample_rate,
+                },
+                report: Some(FastVadSummary {
+                    dropped_samples,
+                    sample_rate,
+                }),
             }));
         }
 
-        Ok(Some(CapturedAudio {
-            samples,
-            sample_rate,
+        Ok(Some(PreprocessedAudio {
+            audio: CapturedAudio {
+                samples,
+                sample_rate,
+            },
+            report: None,
         }))
     }
 
     async fn process_audio(&mut self, audio_data: CapturedAudio) -> Result<()> {
-        let maybe_audio = self.preprocess_audio(audio_data)?;
+        if let Some(benchmark) = self.benchmark.as_mut() {
+            benchmark.mark_processing_start(Instant::now());
+        }
 
-        let Some(processed_audio) = maybe_audio else {
+        let preprocess_start = Instant::now();
+        let maybe_audio = self.preprocess_audio(audio_data)?;
+        let preprocess_duration = preprocess_start.elapsed();
+
+        if let Some(benchmark) = self.benchmark.as_mut() {
+            benchmark.record_preprocess_duration(preprocess_duration);
+        }
+
+        let Some(preprocessed) = maybe_audio else {
+            if let Some(mut benchmark) = self.benchmark.take() {
+                benchmark.mark_injection_skipped(Instant::now());
+                if let Some(summary) = benchmark.finalize() {
+                    info!(message = %format_args!("\n{}", summary));
+                }
+            }
             return Ok(());
         };
 
-        if processed_audio.is_empty() {
+        if preprocessed.audio.is_empty() {
             info!("🎧 No audio remaining after preprocessing; skipping transcription");
+            if let Some(mut benchmark) = self.benchmark.take() {
+                benchmark.mark_injection_skipped(Instant::now());
+                if let Some(summary) = benchmark.finalize() {
+                    info!(message = %format_args!("\n{}", summary));
+                }
+            }
             return Ok(());
+        }
+
+        let PreprocessedAudio { audio, report } = preprocessed;
+        let trimmed_rate = report
+            .as_ref()
+            .map(|summary| summary.sample_rate)
+            .unwrap_or(audio.sample_rate);
+        let dropped_samples = report.as_ref().map(|summary| summary.dropped_samples);
+
+        if let Some(benchmark) = self.benchmark.as_mut() {
+            benchmark.record_trimmed_audio(audio.len(), trimmed_rate, dropped_samples);
         }
 
         let CapturedAudio {
             samples,
             sample_rate,
-        } = processed_audio;
+        } = audio;
 
         let audio_for_transcription = if sample_rate == 16_000 {
             samples
@@ -579,20 +663,51 @@ impl HyprwhsprApp {
             resample_audio(&samples, sample_rate, 16_000)
         };
 
-        let transcription = self.transcriber.transcribe(audio_for_transcription).await?;
+        if let Some(benchmark) = self.benchmark.as_mut() {
+            benchmark.record_audio_sent(audio_for_transcription.len(), 16_000);
+        }
 
-        if transcription.trim().is_empty() {
+        let TranscriptionResult { text, metrics } =
+            self.transcriber.transcribe(audio_for_transcription).await?;
+
+        if let Some(benchmark) = self.benchmark.as_mut() {
+            benchmark.record_backend_metrics(metrics);
+        }
+
+        if text.trim().is_empty() {
             warn!("Empty transcription, nothing to inject");
+            if let Some(mut benchmark) = self.benchmark.take() {
+                benchmark.mark_injection_skipped(Instant::now());
+                if let Some(summary) = benchmark.finalize() {
+                    info!(message = %format_args!("\n{}", summary));
+                }
+            }
             return Ok(());
         }
 
-        info!("📝 Transcription: \"{}\"", transcription);
+        info!("📝 Transcription: \"{}\"", text);
 
         let text_injector = Arc::clone(&self.text_injector);
         let mut injector = text_injector.lock().await;
 
+        let injection_start = Instant::now();
+        if let Some(benchmark) = self.benchmark.as_mut() {
+            benchmark.mark_injection_start(injection_start);
+        }
+
         debug!("⌨️  Injecting text into active application...");
-        injector.inject_text(&transcription).await?;
+        injector.inject_text(&text).await?;
+
+        let injection_end = Instant::now();
+        if let Some(benchmark) = self.benchmark.as_mut() {
+            benchmark.mark_injection_end(injection_end);
+        }
+
+        if let Some(benchmark) = self.benchmark.take() {
+            if let Some(summary) = benchmark.finalize() {
+                info!(message = %format_args!("\n{}", summary));
+            }
+        }
 
         Ok(())
     }
