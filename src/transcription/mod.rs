@@ -50,9 +50,11 @@ impl TranscriptionBackend {
             TranscriptionProvider::WhisperCpp => {
                 let prompt = Self::prompt_for(config, TranscriptionProvider::WhisperCpp);
                 let whisper_cfg = &config.transcription.whisper_cpp;
+                let whisper_binaries =
+                    config_manager.get_whisper_binary_candidates(whisper_cfg.fallback_cli);
                 let manager = WhisperManager::new(
                     config_manager.get_model_path(),
-                    config_manager.get_whisper_binary_path(),
+                    whisper_binaries,
                     whisper_cfg.threads,
                     prompt,
                     config_manager.get_temp_dir(),

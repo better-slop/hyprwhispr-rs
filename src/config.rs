@@ -685,28 +685,34 @@ impl ConfigManager {
         Self::resolve_vad_model_path(config, Some(&self.inner.config_path))
     }
 
-    pub fn get_whisper_binary_path(&self) -> PathBuf {
-        let system_binary = PathBuf::from("/usr/bin/whisper-cli");
-        if system_binary.exists() {
-            return system_binary;
-        }
-
+    pub fn get_whisper_binary_candidates(&self, include_fallbacks: bool) -> Vec<PathBuf> {
         let home = env::var("HOME").expect("HOME not set");
-        let local_dir = PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp");
+        let local_dir = PathBuf::from(&home).join(".local/share/hyprwhspr/whisper.cpp");
+        let build_bin = local_dir.join("build/bin");
 
-        let candidates = vec![
-            local_dir.join("build/bin/whisper-cli"),
-            local_dir.join("main"),
-            local_dir.join("whisper"),
-        ];
-
-        for path in candidates {
-            if path.exists() {
-                return path;
+        let mut candidates = Vec::new();
+        let push_candidate = |path: PathBuf, list: &mut Vec<PathBuf>| {
+            if path.exists() && !list.contains(&path) {
+                list.push(path);
             }
+        };
+
+        // Prefer the managed local build if available
+        push_candidate(build_bin.join("whisper-cli"), &mut candidates);
+        push_candidate(local_dir.join("whisper-cli"), &mut candidates);
+
+        // System-installed whisper-cli (e.g., from packages)
+        push_candidate(PathBuf::from("/usr/bin/whisper-cli"), &mut candidates);
+
+        if include_fallbacks {
+            push_candidate(build_bin.join("main"), &mut candidates);
+            push_candidate(build_bin.join("whisper"), &mut candidates);
+            push_candidate(local_dir.join("main"), &mut candidates);
+            push_candidate(local_dir.join("whisper"), &mut candidates);
+            push_candidate(PathBuf::from("/usr/bin/whisper"), &mut candidates);
         }
 
-        system_binary
+        candidates
     }
 
     pub fn get_temp_dir(&self) -> PathBuf {

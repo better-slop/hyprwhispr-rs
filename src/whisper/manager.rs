@@ -1,10 +1,10 @@
 use crate::transcription::{
     clean_transcription, contains_only_non_speech_markers, BackendMetrics, TranscriptionResult,
 };
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::convert::TryFrom;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 use tracing::{debug, info, trace, warn};
@@ -42,7 +42,7 @@ impl WhisperVadOptions {
 
 pub struct WhisperManager {
     model_path: PathBuf,
-    binary_path: PathBuf,
+    binary_paths: Vec<PathBuf>,
     threads: usize,
     whisper_prompt: String,
     temp_dir: PathBuf,
@@ -54,7 +54,7 @@ pub struct WhisperManager {
 impl WhisperManager {
     pub fn new(
         model_path: PathBuf,
-        binary_path: PathBuf,
+        binary_paths: Vec<PathBuf>,
         threads: usize,
         whisper_prompt: String,
         temp_dir: PathBuf,
@@ -62,9 +62,15 @@ impl WhisperManager {
         vad: WhisperVadOptions,
         no_speech_threshold: f32,
     ) -> Result<Self> {
+        if binary_paths.is_empty() {
+            return Err(anyhow!(
+                "No whisper binaries found. Install whisper.cpp or provide a valid binary path."
+            ));
+        }
+
         Ok(Self {
             model_path,
-            binary_path,
+            binary_paths,
             threads,
             whisper_prompt,
             temp_dir,
@@ -76,25 +82,47 @@ impl WhisperManager {
 
     pub fn initialize(&self) -> Result<()> {
         if !self.model_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Whisper model not found at: {:?}",
-                self.model_path
-            ));
+            return Err(anyhow!("Whisper model not found at: {:?}", self.model_path));
         }
 
-        if !self.binary_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Whisper binary not found at: {:?}",
-                self.binary_path
-            ));
-        }
+        let available_binary = self
+            .binary_paths
+            .iter()
+            .find(|path| path.exists())
+            .ok_or_else(|| {
+                let attempted = self
+                    .binary_paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow!(
+                    "None of the configured whisper binaries were found. Tried: {}",
+                    if attempted.is_empty() {
+                        "<none>".to_string()
+                    } else {
+                        attempted
+                    }
+                )
+            })?;
 
         // Detect GPU support
         let gpu_info = Self::detect_gpu();
 
         info!("✅ Whisper initialized");
         info!("   Model: {:?}", self.model_path);
-        info!("   Binary: {:?}", self.binary_path);
+        info!("   Binary: {:?}", available_binary);
+        if self.binary_paths.len() > 1 {
+            let fallback_list = self
+                .binary_paths
+                .iter()
+                .filter(|p| p != &available_binary)
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>();
+            if !fallback_list.is_empty() {
+                debug!("   Additional binaries: {}", fallback_list.join(", "));
+            }
+        }
         info!("   GPU: {}", gpu_info);
         if self.gpu_layers > 0 {
             info!("   GPU: enabled (AUR version uses GPU by default)");
@@ -257,14 +285,61 @@ impl WhisperManager {
     }
 
     async fn run_whisper_cli(&self, audio_file: &PathBuf) -> Result<String> {
-        let mut cmd = Command::new(&self.binary_path);
+        let mut last_error: Option<anyhow::Error> = None;
+        let mut attempted: Vec<PathBuf> = Vec::new();
+
+        for binary in &self.binary_paths {
+            if !binary.exists() {
+                debug!(
+                    "Skipping whisper binary {:?} because it does not exist",
+                    binary
+                );
+                continue;
+            }
+
+            attempted.push(binary.clone());
+
+            match self.invoke_whisper(binary, audio_file) {
+                Ok(result) => {
+                    if last_error.is_some() {
+                        info!("Whisper succeeded using fallback binary: {:?}", binary);
+                    }
+                    return Ok(result);
+                }
+                Err(err) => {
+                    warn!("Whisper binary {:?} failed: {:#}", binary, err);
+                    last_error = Some(err);
+                    continue;
+                }
+            }
+        }
+
+        let tried = if attempted.is_empty() {
+            "<none>".to_string()
+        } else {
+            attempted
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        Err(last_error.unwrap_or_else(|| anyhow!("All whisper binaries failed. Tried: {}", tried)))
+    }
+
+    fn invoke_whisper(&self, binary: &Path, audio_file: &PathBuf) -> Result<String> {
+        let mut cmd = Command::new(binary);
 
         // Basic args
         cmd.args(&[
             "-m",
-            self.model_path.to_str().unwrap(),
+            self.model_path
+                .to_str()
+                .ok_or_else(|| anyhow!("Model path contains invalid UTF-8"))?,
             "-f",
-            audio_file.to_str().unwrap(),
+            audio_file
+                .to_str()
+                .ok_or_else(|| anyhow!("Audio path contains invalid UTF-8"))?,
             "--output-txt",
             "--language",
             "en",
@@ -315,24 +390,31 @@ impl WhisperManager {
             debug!("GPU enabled (will use GPU if available)");
         }
 
-        debug!("Running whisper: {:?}", cmd);
+        debug!("Running whisper (binary: {:?}): {:?}", binary, cmd);
 
-        let output = cmd.output().context("Failed to execute whisper binary")?;
+        let output = cmd
+            .output()
+            .with_context(|| format!("Failed to execute whisper binary at {:?}", binary))?;
 
         // Log whisper output for debugging
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        trace!("Whisper stdout: {}", stdout);
-        trace!("Whisper stderr: {}", stderr);
+        trace!("Whisper stdout ({}): {}", binary.display(), stdout);
+        trace!("Whisper stderr ({}): {}", binary.display(), stderr);
 
         if !output.status.success() {
-            warn!(
-                "Whisper command failed with exit code: {:?}",
-                output.status.code()
+            let exit_code = output.status.code().map_or_else(
+                || "terminated by signal".to_string(),
+                |code| format!("exit code {}", code),
             );
+            warn!("Whisper binary {:?} failed with {}", binary, exit_code);
             warn!("Stderr: {}", stderr);
-            return Err(anyhow::anyhow!("Whisper failed: {}", stderr));
+            return Err(anyhow!(
+                "Whisper failed ({exit_code}) using {:?}: {}",
+                binary,
+                stderr.trim()
+            ));
         }
 
         // Try to read output txt file
@@ -348,7 +430,7 @@ impl WhisperManager {
                 );
                 info!(
                     "You can test manually with: {} -m {} -f {:?} -ngl {}",
-                    self.binary_path.display(),
+                    binary.display(),
                     self.model_path.display(),
                     audio_file,
                     self.gpu_layers
@@ -358,7 +440,10 @@ impl WhisperManager {
             Ok(transcription.trim().to_string())
         } else {
             // Fallback to stdout
-            warn!("No .txt file created by whisper, using stdout");
+            warn!(
+                "No .txt file created by whisper using {:?}, falling back to stdout",
+                binary
+            );
             Ok(stdout.trim().to_string())
         }
     }
