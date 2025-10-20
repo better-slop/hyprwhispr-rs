@@ -139,7 +139,7 @@
 <details>
   <summary>
     <strong>Earshot VAD trimming</strong> (optional)
-    <p>The default build ships with the <a href="https://crates.io/crates/earshot">earshot</a> VoiceActivityDetector baked in. Toggle `fast_vad.enabled` in your config to trim silence before any provider (whisper.cpp, Groq, Gemini) sees the audio. Extremely useful for lowering costs and increasing speed.</p>
+    <p>The default build ships with the <a href="https://crates.io/crates/earshot">earshot</a> VoiceActivityDetector baked in. Toggle <code>fast_vad.enabled</code> in your config to trim silence before any provider (whisper.cpp, Groq, Gemini) sees the audio. Extremely useful for lowering costs and increasing speed.</p>
   </summary>
 
 - Operates on the 16 kHz PCM emitted by the capture layer and shares the trimmed buffer across all providers.
