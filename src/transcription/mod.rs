@@ -114,8 +114,7 @@ impl TranscriptionBackend {
 
         match new.transcription.provider {
             TranscriptionProvider::WhisperCpp => {
-                current.vad != new.vad
-                    || current.transcription.whisper_cpp != new.transcription.whisper_cpp
+                current.transcription.whisper_cpp != new.transcription.whisper_cpp
             }
             TranscriptionProvider::Groq => {
                 current.transcription.request_timeout_secs != new.transcription.request_timeout_secs

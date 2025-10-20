@@ -87,22 +87,6 @@
     "volatility_increase_threshold": 0.35, // Bump profile when toggles exceed this ratio
     "volatility_decrease_threshold": 0.12 // Relax profile when toggles stay below this ratio
   },
-  "vad": {
-    "enabled": false, // Toggles Silero VAD inside whisper.cpp
-    "model": "ggml-silero-v5.1.2.bin", // Path or filename for the ggml Silero VAD model (ggml-silero-v5.1.2.bin)
-    // Probability threshold for deciding a frame is speech. Higher = fewer false positives, but may miss quiet speech.
-    "threshold": 0.5,
-    // Minimum contiguous speech duration (ms) to accept. Increase to ignore quick clicks/taps.
-    "min_speech_ms": 250,
-    // Minimum silence gap (ms) required to end a speech segment. Raise if mid-sentence pauses are being split.
-    "min_silence_ms": 120,
-    // Maximum speech duration (seconds) before forcing a cut. Use Infinity to leave unlimited.
-    "max_speech_s": 15.0,
-    // Extra padding (ms) added before/after detected speech so words aren't clipped.
-    "speech_pad_ms": 80,
-    // Overlap ratio between segments (seconds). Higher overlap helps smooth transitions at the cost of a little extra decode time.
-    "samples_overlap": 0.1,
-  },
   "transcription": {
     "provider": "whisper_cpp", // whisper_cpp | groq | gemini
     "request_timeout_secs": 45,
@@ -116,7 +100,23 @@
       "no_speech_threshold": 0.6, // Whisper's "no speech" confidence gate
       "models_dirs": [
         "~/.config/hyprwhspr-rs/models"
-      ] // Directories to search for models
+      ], // Directories to search for models
+      "vad": {
+        "enabled": false, // Toggle whisper-cli's native Silero VAD
+        "model": "ggml-silero-v5.1.2.bin", // Path or filename for the ggml Silero VAD model
+        // Probability threshold for deciding a frame is speech. Higher = fewer false positives, but may miss quiet speech.
+        "threshold": 0.5,
+        // Minimum contiguous speech duration (ms) to accept. Increase to ignore quick clicks/taps.
+        "min_speech_ms": 250,
+        // Minimum silence gap (ms) required to end a speech segment. Raise if mid-sentence pauses are being split.
+        "min_silence_ms": 120,
+        // Maximum speech duration (seconds) before forcing a cut. Use Infinity to leave unlimited.
+        "max_speech_s": 15.0,
+        // Extra padding (ms) added before/after detected speech so words aren't clipped.
+        "speech_pad_ms": 80,
+        // Overlap ratio between segments. Higher overlap helps smooth transitions at the cost of a little extra decode time.
+        "samples_overlap": 0.1
+      }
     },
     "groq": {
       "model": "whisper-large-v3-turbo",
