@@ -137,10 +137,9 @@
 </details>
 
 <details>
-  <summary><strong>Earshot VAD trimming</strong> (optional)</summary>
-
-The default build ships with the [`earshot`](https://crates.io/crates/earshot) VoiceActivityDetector baked in. Toggle
-`fast_vad.enabled` in your config to trim silence before any provider (whisper.cpp, Groq, Gemini) sees the audio.
+  <summary>
+    <strong>Earshot VAD trimming</strong> (optional)</summary>
+    <p>The default build ships with the [`earshot`](https://crates.io/crates/earshot) VoiceActivityDetector baked in. Toggle `fast_vad.enabled` in your config to trim silence before any provider (whisper.cpp, Groq, Gemini) sees the audio.</p>
 
 - Operates on the 16 kHz PCM emitted by the capture layer and shares the trimmed buffer across all providers.
 - Drops silent stretches longer than the configured timeout while keeping configurable pre-roll and post-roll padding so
@@ -154,9 +153,10 @@ recompiling.
 </details>
 
 <details>
-  <summary><strong>Release process</strong></summary>
-
-Releases are tag-driven and automated by GitHub Actions. Runtime builds continue to rely on a local `whisper.cpp` installation, so validate that dependency before shipping a version.
+  <summary>
+    <strong>Release process</strong>
+    <p>Releases are tag-driven and automated by GitHub Actions. Runtime builds continue to rely on a local `whisper.cpp` installation, so validate that dependency before shipping a version.</p>
+  </summary>
 
 1. Install the tooling once: `cargo install cargo-release git-cliff`.
 2. For prereleases run `cargo release --no-dev-version --pre-release alpha` (append `--execute` when ready to push). This updates the changelog, creates the tag (`vX.Y.Z-alpha.N`), and prepares artifacts.
