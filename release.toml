@@ -6,6 +6,7 @@ delete-tag = false
 sign-tag = false
 allow-branch = ["main", "master"]
 dev-version = false
+publish = false
 
 changelog = { path = "CHANGELOG.md" }
 
