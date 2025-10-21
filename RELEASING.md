@@ -11,7 +11,7 @@ This project ships tagged releases from GitHub Actions. Every artifact assumes t
 ## Cutting a prerelease
 
 1. Make sure `CHANGELOG.md` is up to date or run `git-cliff -c git-cliff.toml --tag <next-version>` locally.
-2. Run `cargo release alpha --execute` to bump metadata, refresh the changelog, tag `vX.Y.Z-alpha.N`, and push.
+2. Run `cargo release --no-publish alpha --execute` to bump metadata, refresh the changelog, tag `vX.Y.Z-alpha.N`, and push without attempting a crates.io publish.
 3. The `release` workflow builds the Linux binary, publishes a GitHub prerelease with the tarball/checksum, and skips crates.io.
 
 ## Cutting a stable release
