@@ -86,9 +86,6 @@ pub struct Config {
     pub fast_vad: FastVadConfig,
 
     #[serde(default)]
-    pub vad: VadConfig,
-
-    #[serde(default)]
     pub transcription: TranscriptionConfig,
 
     #[serde(default, rename = "model", skip_serializing)]
@@ -111,6 +108,9 @@ pub struct Config {
 
     #[serde(default, rename = "fallback_cli", skip_serializing)]
     legacy_fallback_cli: Option<bool>,
+
+    #[serde(default, rename = "vad", skip_serializing)]
+    legacy_vad: Option<VadConfig>,
 }
 
 fn default_gpu_layers() -> i32 {
@@ -344,6 +344,7 @@ pub struct WhisperCppConfig {
     pub fallback_cli: bool,
     pub no_speech_threshold: f32,
     pub models_dirs: Vec<String>,
+    pub vad: VadConfig,
 }
 
 impl Default for WhisperCppConfig {
@@ -356,6 +357,7 @@ impl Default for WhisperCppConfig {
             fallback_cli: false,
             no_speech_threshold: default_no_speech_threshold(),
             models_dirs: Vec::new(),
+            vad: VadConfig::default(),
         }
     }
 }
@@ -440,7 +442,6 @@ impl Default for Config {
             paste_hints: PasteHintsConfig::default(),
             audio_device: None,
             fast_vad: FastVadConfig::default(),
-            vad: VadConfig::default(),
             transcription: TranscriptionConfig::default(),
             legacy_model: None,
             legacy_threads: None,
@@ -449,6 +450,7 @@ impl Default for Config {
             legacy_models_dirs: None,
             legacy_no_speech_threshold: None,
             legacy_fallback_cli: None,
+            legacy_vad: None,
         };
         config.normalize_shortcuts();
         config
@@ -518,6 +520,10 @@ impl Config {
 
         if let Some(fallback_cli) = self.legacy_fallback_cli.take() {
             self.transcription.whisper_cpp.fallback_cli = fallback_cli;
+        }
+
+        if let Some(vad) = self.legacy_vad.take() {
+            self.transcription.whisper_cpp.vad = vad;
         }
     }
 
@@ -679,28 +685,34 @@ impl ConfigManager {
         Self::resolve_vad_model_path(config, Some(&self.inner.config_path))
     }
 
-    pub fn get_whisper_binary_path(&self) -> PathBuf {
-        let system_binary = PathBuf::from("/usr/bin/whisper-cli");
-        if system_binary.exists() {
-            return system_binary;
-        }
-
+    pub fn get_whisper_binary_candidates(&self, include_fallbacks: bool) -> Vec<PathBuf> {
         let home = env::var("HOME").expect("HOME not set");
-        let local_dir = PathBuf::from(home).join(".local/share/hyprwhspr/whisper.cpp");
+        let local_dir = PathBuf::from(&home).join(".local/share/hyprwhspr/whisper.cpp");
+        let build_bin = local_dir.join("build/bin");
 
-        let candidates = vec![
-            local_dir.join("build/bin/whisper-cli"),
-            local_dir.join("main"),
-            local_dir.join("whisper"),
-        ];
-
-        for path in candidates {
-            if path.exists() {
-                return path;
+        let mut candidates = Vec::new();
+        let push_candidate = |path: PathBuf, list: &mut Vec<PathBuf>| {
+            if path.exists() && !list.contains(&path) {
+                list.push(path);
             }
+        };
+
+        // Prefer the managed local build if available
+        push_candidate(build_bin.join("whisper-cli"), &mut candidates);
+        push_candidate(local_dir.join("whisper-cli"), &mut candidates);
+
+        // System-installed whisper-cli (e.g., from packages)
+        push_candidate(PathBuf::from("/usr/bin/whisper-cli"), &mut candidates);
+
+        if include_fallbacks {
+            push_candidate(build_bin.join("main"), &mut candidates);
+            push_candidate(build_bin.join("whisper"), &mut candidates);
+            push_candidate(local_dir.join("main"), &mut candidates);
+            push_candidate(local_dir.join("whisper"), &mut candidates);
+            push_candidate(PathBuf::from("/usr/bin/whisper"), &mut candidates);
         }
 
-        system_binary
+        candidates
     }
 
     pub fn get_temp_dir(&self) -> PathBuf {
@@ -773,11 +785,12 @@ impl ConfigManager {
     }
 
     fn resolve_vad_model_path(config: &Config, config_path: Option<&Path>) -> Option<PathBuf> {
-        if !config.vad.enabled {
+        let vad_config = &config.transcription.whisper_cpp.vad;
+        if !vad_config.enabled {
             return None;
         }
 
-        let model_ref = config.vad.model.trim();
+        let model_ref = vad_config.model.trim();
         if model_ref.is_empty() {
             return None;
         }

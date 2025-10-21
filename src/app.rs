@@ -12,7 +12,7 @@ use crate::audio::{
     capture::RecordingSession, AudioCapture, AudioFeedback, CapturedAudio, FastVad, FastVadOutcome,
 };
 use crate::benchmark::BenchmarkRecorder;
-use crate::config::{Config, ConfigManager, ShortcutsConfig};
+use crate::config::{Config, ConfigManager, ShortcutsConfig, TranscriptionProvider};
 use crate::input::{GlobalShortcuts, ShortcutEvent, ShortcutKind, ShortcutPhase, TextInjector};
 use crate::status::StatusWriter;
 use crate::transcription::{TranscriptionBackend, TranscriptionResult};
@@ -140,16 +140,31 @@ struct PreprocessedAudio {
 }
 
 fn build_vad_options(config_manager: &ConfigManager, config: &Config) -> WhisperVadOptions {
+    let whisper_vad = &config.transcription.whisper_cpp.vad;
     WhisperVadOptions {
-        enabled: config.vad.enabled,
+        enabled: whisper_vad.enabled,
         model_path: config_manager.get_vad_model_path(config),
-        threshold: config.vad.threshold,
-        min_speech_ms: config.vad.min_speech_ms,
-        min_silence_ms: config.vad.min_silence_ms,
-        max_speech_s: config.vad.max_speech_s,
-        speech_pad_ms: config.vad.speech_pad_ms,
-        samples_overlap: config.vad.samples_overlap,
+        threshold: whisper_vad.threshold,
+        min_speech_ms: whisper_vad.min_speech_ms,
+        min_silence_ms: whisper_vad.min_silence_ms,
+        max_speech_s: whisper_vad.max_speech_s,
+        speech_pad_ms: whisper_vad.speech_pad_ms,
+        samples_overlap: whisper_vad.samples_overlap,
     }
+}
+
+fn fast_vad_allowed(config: &Config) -> bool {
+    if !config.fast_vad.enabled {
+        return false;
+    }
+
+    if config.transcription.provider == TranscriptionProvider::WhisperCpp
+        && config.transcription.whisper_cpp.vad.enabled
+    {
+        return false;
+    }
+
+    true
 }
 
 pub struct HyprwhsprApp {
@@ -213,8 +228,18 @@ impl HyprwhsprApp {
 
         let (shortcut_tx, shortcut_rx) = mpsc::channel(10);
 
-        let fast_vad = FastVad::maybe_new(&config.fast_vad, audio_capture.sample_rate_hint())
-            .context("Failed to initialize fast VAD pipeline")?;
+        let fast_vad = if fast_vad_allowed(&config) {
+            FastVad::maybe_new(&config.fast_vad, audio_capture.sample_rate_hint())
+                .context("Failed to initialize fast VAD pipeline")?
+        } else {
+            if config.fast_vad.enabled
+                && config.transcription.provider == TranscriptionProvider::WhisperCpp
+                && config.transcription.whisper_cpp.vad.enabled
+            {
+                info!("⚡ Earshot fast VAD disabled because whisper-cli VAD is active");
+            }
+            None
+        };
 
         if let Some(vad) = &fast_vad {
             info!(
@@ -382,7 +407,27 @@ impl HyprwhsprApp {
             self.log_shortcut_configuration(&new_config.shortcuts);
         }
 
-        if self.current_config.fast_vad != new_config.fast_vad {
+        let fast_vad_was_allowed = fast_vad_allowed(&self.current_config);
+        let fast_vad_is_allowed = fast_vad_allowed(&new_config);
+
+        if !fast_vad_is_allowed {
+            let conflict_with_whisper = new_config.fast_vad.enabled
+                && new_config.transcription.provider == TranscriptionProvider::WhisperCpp
+                && new_config.transcription.whisper_cpp.vad.enabled;
+
+            if conflict_with_whisper {
+                info!("⚡ Earshot fast VAD disabled because whisper-cli VAD is active");
+            } else if self.fast_vad.is_some()
+                || (fast_vad_was_allowed && self.current_config.fast_vad.enabled)
+            {
+                info!("⚡ Earshot fast VAD disabled");
+            }
+
+            self.fast_vad = None;
+        } else if !fast_vad_was_allowed
+            || self.current_config.fast_vad != new_config.fast_vad
+            || self.fast_vad.is_none()
+        {
             self.fast_vad =
                 FastVad::maybe_new(&new_config.fast_vad, self.audio_capture.sample_rate_hint())
                     .context("Failed to refresh fast VAD pipeline")?;
@@ -392,8 +437,6 @@ impl HyprwhsprApp {
                     vad.settings().base_profile,
                     new_config.fast_vad.silence_timeout_ms
                 );
-            } else {
-                info!("⚡ Earshot fast VAD disabled");
             }
         }
 
