@@ -1,0 +1,46 @@
+[workspace]
+release_always = false
+git_release_enable = false
+publish = true
+pr_labels = ["release"]
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+"""
+body = """
+## [{{ version }}]{% if release_link %} ({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{%- if commits | length == 0 %}
+_No notable changes._
+{%- else %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits -%}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message }}{% if commit.links %} ({% for link in commit.links %}[{{ link.text }}]({{ link.href }}) {% endfor -%}){% endif %}
+{% endfor %}
+{% endfor %}
+{%- endif %}
+"""
+trim = true
+protect_breaking_commits = true
+sort_commits = "newest"
+commit_preprocessors = [
+  { pattern = "\\(#(\\d+)\\)", replace = "([#${1}](https://github.com/better-slop/hyprwhspr-rs/pull/${1}))" },
+]
+commit_parsers = [
+  { message = "^feat", group = "features" },
+  { message = "^fix", group = "fixes" },
+  { message = "^perf", group = "performance" },
+  { message = "^refactor", group = "refactors" },
+  { message = "^docs", group = "docs" },
+  { message = "^test", group = "tests" },
+  { message = "^build", group = "build" },
+  { message = "^chore", group = "chores" },
+  { message = "^.*", group = "other" },
+]

@@ -19,7 +19,7 @@ protect_tags = true
 
 [changelog]
 header = "# Changelog\n\nAll notable changes to this project will be documented in this file."
-body = "\n{% if version %}## {{ version | trim_start_matches(prefix=\"v\") }} - {{ timestamp | date(format=\"%Y-%m-%d\") }}{% endif %}\n{% for group, commits in commits | group_by(attribute=\"group\") %}\n### {{ group }}\n{% for commit in commits %}- {{ commit.message | upper_first }} ({{ commit.id | truncate(length=8, end=\"\") }})\n{% endfor %}\n{% endfor %}"
+body = "\n{% if version %}## {{ version | trim_start_matches(pat=\"v\") }} - {{ timestamp | date(format=\"%Y-%m-%d\") }}{% endif %}\n{% for group, commits in commits | group_by(attribute=\"group\") %}\n### {{ group }}\n{% for commit in commits %}- {{ commit.message | upper_first }} ({{ commit.id | truncate(length=8, end=\"\") }})\n{% endfor %}\n{% endfor %}"
 footer = "\n"
 sort_groups = true
 

@@ -162,10 +162,10 @@ recompiling.
     <p>Runtime builds rely on a local <code>whisper.cpp</code> installation, so validate that dependency before shipping a tagged version.</p>
   </summary>
 
-1. Install the tooling once: `cargo install cargo-release git-cliff`.
-2. For prereleases run `cargo release --no-publish alpha` (append `--execute` when ready to push). This updates the changelog, creates the tag (`vX.Y.Z-alpha.N`), and prepares artifacts without attempting a crates.io publish.
-3. Push with `git push --follow-tags`. The `release` workflow builds the binary, publishes the GitHub prerelease, and attaches the tarball plus checksum.
-4. When stabilizing, run `cargo release --no-publish --execute` to cut, tag, and push the final version. The same workflow publishes the crate to crates.io because stable tags omit the prerelease suffix.
+1. Use [Conventional Commits](https://www.conventionalcommits.org/) – `fix:` bumps patch, `feat:` bumps minor, and `type!:` indicates a breaking change (major bump).
+2. On every push to `main`, the `release-plz` workflow runs `release-pr` to open or refresh a `release-plz-*` pull request. Review the proposed version and changelog there.
+3. When the release PR looks good, merge it. The same workflow runs `release-plz release`, tagging (`vX.Y.Z`) and publishing the crate to crates.io if it’s a stable tag.
+4. The tag triggers the `release` workflow, which builds the Linux binary, uploads the tarball + checksum, and publishes the GitHub release.
 
 > Define `CRATES_IO_TOKEN` in the repository secrets with publish-only permissions so the workflow can push stable releases to crates.io.
 

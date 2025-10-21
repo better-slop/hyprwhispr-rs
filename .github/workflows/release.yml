@@ -28,16 +28,29 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Install release tooling
-        uses: taiki-e/install-action@v2
-        with:
-          tool: git-cliff
-
       - name: Build
         run: cargo build --release
 
-      - name: Generate release notes
-        run: git-cliff -c git-cliff.toml -o release-notes.md --tag "${{ github.ref_name }}"
+      - name: Extract changelog entry
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            BEGIN { capture=0 }
+            /^## \[/ {
+              if (capture) exit
+              match($0, /^\#\# \[([^]]+)\]/, m)
+              if (m[1] == ver) { capture=1; print; next }
+            }
+            capture {
+              if ($0 ~ /^\#\# \[/) exit
+              print
+            }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No changelog entry found for ${version}" >&2
+            exit 1
+          fi
 
       - name: Package artifacts
         run: |
@@ -64,22 +77,3 @@ jobs:
             dist/hyprwhspr-rs-*.sha256
           body_path: release-notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
-
-  publish-crate:
-    name: publish-crates-io
-    runs-on: ubuntu-latest
-    needs: build-and-release
-    if: ${{ !contains(github.ref_name, '-') }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish
