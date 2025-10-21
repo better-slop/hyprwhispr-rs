@@ -8,8 +8,6 @@ allow-branch = ["main", "master"]
 dev-version = false
 publish = false
 
-changelog = { path = "CHANGELOG.md" }
-
 pre-release-hook = [
   "git-cliff",
   "-c",
