@@ -5,6 +5,9 @@ edition = "2021"
 authors = ["hyprwhspr-rs contributors"]
 description = "Native speech-to-text voice dictation for Hyprland (Rust implementation)"
 license = "MIT"
+repository = "https://github.com/better-slop/hyprwhspr-rs"
+homepage = "https://github.com/better-slop/hyprwhspr-rs"
+documentation = "https://github.com/better-slop/hyprwhspr-rs#readme"
 
 [dependencies]
 # Async runtime
