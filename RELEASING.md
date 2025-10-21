@@ -16,7 +16,7 @@ This project ships tagged releases from GitHub Actions. Every artifact assumes t
 
 ## Cutting a stable release
 
-1. Run `cargo release --execute` to tag `vX.Y.Z` and push.
+1. Run `cargo release --no-publish --execute` to tag `vX.Y.Z` and push.
 2. The same workflow republishes the binary and publishes the crate to crates.io because the tag has no prerelease suffix.
 
 ## Verifying whisper.cpp availability
