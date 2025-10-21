@@ -1,33 +1,38 @@
 # Releasing hyprwhspr-rs
 
-This project ships tagged releases from GitHub Actions. Every artifact assumes the end user installs `whisper.cpp` separately so the local transcription backend is available at runtime.
+Releases are automated with [release-plz](https://crates.io/crates/release-plz). Every artifact assumes the end user installs `whisper.cpp` separately so the local transcription backend is available at runtime.
 
 ## Prerequisites
 
-- Install tooling: `cargo install cargo-release git-cliff`.
-- Configure GitHub repository secrets:
-  - `CRATES_IO_TOKEN` with publish permission (used on stable tags).
+- Follow [Conventional Commits](https://www.conventionalcommits.org/):
+  - `fix:` → SemVer patch bump.
+  - `feat:` → SemVer minor bump.
+  - `<prefix>!:` or a `BREAKING CHANGE:` footer → SemVer major bump.
+- Keep the repository clean before pushing to `main`; the workflow refuses dirty trees.
+- Configure repository secrets:
+  - `CRATES_IO_TOKEN` with publish permission (used by the `release-plz release` job for stable releases).
 
-## Cutting a prerelease
+## Automated flow
 
-1. Make sure `CHANGELOG.md` is up to date or run `git-cliff -c git-cliff.toml --tag <next-version>` locally.
-2. Run `cargo release alpha --execute` to bump metadata, refresh the changelog, tag `vX.Y.Z-alpha.N`, and push.
-3. The `release` workflow builds the Linux binary, publishes a GitHub prerelease with the tarball/checksum, and skips crates.io.
+1. Push changes to `main`.
+2. `.github/workflows/release-plz.yml` runs `release-plz release-pr`, updating or opening a `release-plz-*` pull request with the proposed version bump and `CHANGELOG.md` entry.
+3. Review the PR:
+   - Validate the suggested SemVer bump.
+   - Tidy the generated changelog if needed.
+   - Ensure preflight checks (`cargo fmt`, `cargo clippy --all-targets`, `cargo test`, `cargo build --release`) pass on your branch.
+4. Merge the release PR once it looks right.
+5. The same workflow runs `release-plz release`, which:
+   - Publishes updated crates to crates.io.
+   - Tags the commit (`vX.Y.Z`).
+6. The tag triggers `.github/workflows/release.yml`, which builds the optimized Linux binary, bundles the tarball plus checksum, and publishes the GitHub release using the `CHANGELOG.md` entry for the tag.
 
-## Cutting a stable release
+> Trusted publishing is supported by deleting `CARGO_REGISTRY_TOKEN` and granting `id-token: write` to the `release` job if you prefer that model.
 
-1. Run `cargo release --execute` to tag `vX.Y.Z` and push.
-2. The same workflow republishes the binary and publishes the crate to crates.io because the tag has no prerelease suffix.
+## Manual overrides
 
-## Verifying whisper.cpp availability
+- To preview the upcoming release locally, run `release-plz release-pr --dry-run`.
+- To force a publish from your machine (rarely necessary), run `release-plz release --dry-run` first, then `release-plz release` with `CARGO_REGISTRY_TOKEN` exported. Push the tags it produces so CI can finish the artifact build.
 
-The workflow does not bundle `whisper.cpp`; verify installers or downstream packages make it available (`whisper-cpp` package on Arch/AUR, manual build on other distros) before announcing a release.
+## Pre-release builds
 
-## Preflight checks
-
-Run the usual quality gates before tagging:
-
-- `cargo fmt`
-- `cargo clippy --all-targets`
-- `cargo test`
-- `cargo build --release`
+Release-plz focuses on SemVer stable tags. If you need alpha/beta channels, create a dedicated branch and configure release-plz accordingly (see the [release-plz docs](https://release-plz.dev/docs/)). Coordinate with the team before diverging from the automated stable flow.
