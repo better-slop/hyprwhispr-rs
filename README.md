@@ -41,7 +41,10 @@
     - production release: `./target/release/hyprwhspr-rs`
 
 <details>
-  <summary><strong>Example <code>~/.config/hyprwhspr-rs/config.jsonc</code></strong></summary>
+  <summary>
+    <strong>Example config</strong>
+    <p>Configure in ~/.config/hyprwhspr-rs/config.jsonc</p>
+  </summary>
 
 ```jsonc
 {
